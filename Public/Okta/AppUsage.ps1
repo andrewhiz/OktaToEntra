@@ -293,12 +293,12 @@ function Invoke-OktaUsagePull {
         Internal: pulls and aggregates System Log events for one app.
     #>
     param(
-        [string]   $Domain,
-        [string]   $Token,
-        [string]   $OktaAppId,
-        [string[]] $EventTypes,
-        [string]   $Since,
-        [string]   $Until
+        [string]       $Domain,
+        [SecureString] $Token,
+        [string]       $OktaAppId,
+        [string[]]     $EventTypes,
+        [string]       $Since,
+        [string]       $Until
     )
 
     $totalAttempts    = 0

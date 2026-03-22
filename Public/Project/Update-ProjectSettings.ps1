@@ -44,10 +44,10 @@ function Update-ProjectSettings {
         $oktaToken    = Get-ProjectSecret -ProjectId $projectId -SecretType 'OktaApiToken'
         $clientSecret = Get-ProjectSecret -ProjectId $projectId -SecretType 'GraphClientSecret'
 
-        $oktaStatus   = if ($oktaToken)    { '● stored' } else { '○ NOT SET' }
-        $secretStatus = if ($clientSecret) { '● stored' } else { '○ NOT SET' }
-        $oktaColor    = if ($oktaToken)    { 'Green' }    else { 'Red' }
-        $secretColor  = if ($clientSecret) { 'Green' }    else { 'Red' }
+        $oktaStatus   = if ($oktaToken    -and $oktaToken.Length    -gt 0) { '● stored' } else { '○ NOT SET' }
+        $secretStatus = if ($clientSecret -and $clientSecret.Length -gt 0) { '● stored' } else { '○ NOT SET' }
+        $oktaColor    = if ($oktaToken    -and $oktaToken.Length    -gt 0) { 'Green' }    else { 'Red' }
+        $secretColor  = if ($clientSecret -and $clientSecret.Length -gt 0) { 'Green' }    else { 'Red' }
 
         # ── Header ────────────────────────────────────────────────────────────
         Clear-Host
@@ -100,7 +100,7 @@ function Update-ProjectSettings {
                     Write-Host "  ✓ Okta domain updated." -ForegroundColor Green
                     Write-Host "  Testing new domain..." -ForegroundColor DarkGray
                     $token = Get-ProjectSecret -ProjectId $projectId -SecretType 'OktaApiToken'
-                    if ($token) {
+                    if ($token -and $token.Length -gt 0) {
                         Test-OktaConnection -OktaDomain $newVal -ApiToken $token
                     } else {
                         Write-Host "  ⚠ No API token stored yet — update token (option 2) to test." -ForegroundColor Yellow
@@ -184,7 +184,7 @@ function Update-ProjectSettings {
             '6' {
                 Write-Host ""
                 $token = Get-ProjectSecret -ProjectId $projectId -SecretType 'OktaApiToken'
-                if (-not $token) {
+                if (-not $token -or $token.Length -eq 0) {
                     Write-Host "  ✗ No Okta API token stored. Use option [2] to set it." -ForegroundColor Red
                 } else {
                     $fresh = Get-Content $configPath -Raw | ConvertFrom-Json
@@ -197,7 +197,7 @@ function Update-ProjectSettings {
                 Write-Host ""
                 $fresh  = Get-Content $configPath -Raw | ConvertFrom-Json
                 $secret = Get-ProjectSecret -ProjectId $projectId -SecretType 'GraphClientSecret'
-                if (-not $secret) {
+                if (-not $secret -or $secret.Length -eq 0) {
                     Write-Host "  ✗ No client secret stored. Use option [5] to set it." -ForegroundColor Red
                 } else {
                     Test-EntraConnection -TenantId $fresh.EntraTenantId `
@@ -214,7 +214,7 @@ function Update-ProjectSettings {
                 $secret = Get-ProjectSecret -ProjectId $projectId -SecretType 'GraphClientSecret'
 
                 Write-Host "  ── Okta ──" -ForegroundColor DarkGray
-                if ($token) {
+                if ($token -and $token.Length -gt 0) {
                     Test-OktaConnection -OktaDomain $fresh.OktaDomain -ApiToken $token
                 } else {
                     Write-Host "  ✗ No Okta API token stored." -ForegroundColor Red
@@ -222,7 +222,7 @@ function Update-ProjectSettings {
 
                 Write-Host ""
                 Write-Host "  ── Entra ──" -ForegroundColor DarkGray
-                if ($secret) {
+                if ($secret -and $secret.Length -gt 0) {
                     Test-EntraConnection -TenantId $fresh.EntraTenantId `
                                           -ClientId $fresh.EntraClientId `
                                           -ClientSecret $secret
@@ -263,15 +263,14 @@ function Invoke-SaveConfigField {
 
 function Invoke-SecureRead {
     <#
-        Reads a secret value — uses Read-Host -AsSecureString so the input
-        is masked with asterisks, then converts back to plaintext for storage.
-        This is intentional: we mask during entry, then encrypt at rest via DPAPI.
+        Reads a secret value using Read-Host -AsSecureString (input masked with asterisks).
+        Returns the SecureString directly — never converted to plaintext.
+        The SecureString is passed to Set-ProjectSecret and stored in SecretStore.
     #>
     param([string]$Prompt)
     $secure = Read-Host -Prompt $Prompt -AsSecureString
     if ($secure.Length -eq 0) { return $null }
-    $cred = New-Object System.Net.NetworkCredential("placeholder", $secure)
-    return $cred.Password
+    return $secure
 }
 
 function Invoke-PausePrompt {

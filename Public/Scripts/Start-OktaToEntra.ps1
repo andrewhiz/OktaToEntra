@@ -89,10 +89,10 @@ function Start-OktaToEntra {
                 Write-Host ""
                 $name   = Read-Host "  Project name"
                 $domain = Read-Host "  Okta domain (e.g. company.okta.com)"
-                $token  = Read-Host "  Okta API token"
+                $token  = Read-Host "  Okta API token" -AsSecureString
                 $tid    = Read-Host "  Entra tenant ID (GUID)"
                 $cid    = Read-Host "  Entra client ID (GUID)"
-                $cs     = Read-Host "  Entra client secret"
+                $cs     = Read-Host "  Entra client secret" -AsSecureString
                 New-OktaToEntraProject -Name $name -OktaDomain $domain -OktaApiToken $token `
                     -EntraTenantId $tid -EntraClientId $cid -EntraClientSecret $cs
             }

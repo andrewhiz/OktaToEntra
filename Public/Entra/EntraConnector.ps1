@@ -9,7 +9,7 @@ function Test-EntraConnection {
     param(
         [string]$TenantId,
         [string]$ClientId,
-        [string]$ClientSecret,
+        [SecureString]$ClientSecret,
         [switch]$Silent
     )
 
@@ -19,7 +19,7 @@ function Test-EntraConnection {
         $TenantId     = $script:CurrentProject.EntraTenantId
         $ClientId     = $script:CurrentProject.EntraClientId
         $ClientSecret = Get-ProjectSecret -ProjectId $script:CurrentProject.ProjectId `
-                                           -SecretType 'GraphClientSecret'
+                                          -SecretType 'GraphClientSecret'
     }
 
     if (-not $Silent) { Write-Info "Testing Entra / Graph connection to tenant $TenantId ..." }

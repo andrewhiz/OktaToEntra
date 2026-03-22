@@ -66,6 +66,16 @@ function Confirm-Action {
 
 #region ── HTTP Helpers ─────────────────────────────────────────────────────────
 
+function Unprotect-SecureString {
+    <#
+    .SYNOPSIS
+        Converts a SecureString to plaintext transiently — for use only at the
+        point of building HTTP headers or request bodies. Do not store the result.
+    #>
+    param([Parameter(Mandatory)][SecureString]$SecureString)
+    return [System.Net.NetworkCredential]::new('', $SecureString).Password
+}
+
 function Invoke-OktaApi {
     <#
     .SYNOPSIS
@@ -75,7 +85,7 @@ function Invoke-OktaApi {
     #>
     param(
         [Parameter(Mandatory)][string]$OktaDomain,
-        [Parameter(Mandatory)][string]$ApiToken,
+        [Parameter(Mandatory)][SecureString]$ApiToken,
         [Parameter(Mandatory)][string]$Endpoint,
         [string]$Method = 'GET',
         [object]$Body,
@@ -85,7 +95,7 @@ function Invoke-OktaApi {
     $baseUrl = "https://${OktaDomain}/api/v1"
     $url     = "${baseUrl}${Endpoint}"
     $headers = @{
-        'Authorization' = "SSWS $ApiToken"
+        'Authorization' = "SSWS $(Unprotect-SecureString $ApiToken)"
         'Accept'        = 'application/json'
         'Content-Type'  = 'application/json'
     }
@@ -94,10 +104,9 @@ function Invoke-OktaApi {
 
     do {
         $params = @{
-            Uri             = $url
-            Method          = $Method
-            Headers         = $headers
-            UseBasicParsing = $true
+            Uri     = $url
+            Method  = $Method
+            Headers = $headers
         }
         if ($Body -and $Method -ne 'GET') {
             $params.Body = ($Body | ConvertTo-Json -Depth 10)
@@ -154,10 +163,9 @@ function Invoke-GraphApi {
 
     do {
         $params = @{
-            Uri             = $url
-            Method          = $Method
-            Headers         = $headers
-            UseBasicParsing = $true
+            Uri     = $url
+            Method  = $Method
+            Headers = $headers
         }
         if ($Body -and $Method -ne 'GET') {
             $params.Body = ($Body | ConvertTo-Json -Depth 10)
@@ -187,17 +195,18 @@ function Get-GraphToken {
     <#
     .SYNOPSIS
         Acquires an access token for Microsoft Graph via client credentials flow.
+        ClientSecret is accepted as SecureString and unpacked only for the HTTP call.
     #>
     param(
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter(Mandatory)][string]$ClientId,
-        [Parameter(Mandatory)][string]$ClientSecret
+        [Parameter(Mandatory)][SecureString]$ClientSecret
     )
 
     $body = @{
         grant_type    = 'client_credentials'
         client_id     = $ClientId
-        client_secret = $ClientSecret
+        client_secret = Unprotect-SecureString $ClientSecret
         scope         = 'https://graph.microsoft.com/.default'
     }
 

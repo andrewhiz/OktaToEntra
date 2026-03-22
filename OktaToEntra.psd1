@@ -1,21 +1,24 @@
 @{
     RootModule        = 'OktaToEntra.psm1'
-    ModuleVersion     = '1.0.0'
+    ModuleVersion     = '1.1.0'
     GUID              = 'a3f7c2e1-5b4d-4f8a-9c1e-2d6b0f3a7e5c'
     Author            = 'OktaToEntra'
     Description       = 'Okta to Microsoft Entra ID migration management tool'
-    PowerShellVersion = '5.1'
+    PowerShellVersion = '7.2'
 
-    # PSSQLite is required. SecretManagement/SecretStore are optional —
-    # Vault.ps1 detects and uses them at runtime if available, falls back to DPAPI otherwise.
+    # PSSQLite for local database. SecretManagement + SecretStore are required for
+    # secure credential storage — install via Install-OktaToEntra.ps1 if not present.
     RequiredModules = @(
-        @{ ModuleName = 'PSSQLite'; ModuleVersion = '1.1.0' }
+        @{ ModuleName = 'PSSQLite';                               ModuleVersion = '1.1.0' }
+        @{ ModuleName = 'Microsoft.PowerShell.SecretManagement';  ModuleVersion = '1.1.0' }
+        @{ ModuleName = 'Microsoft.PowerShell.SecretStore';       ModuleVersion = '1.0.0' }
     )
 
     FunctionsToExport = @(
         # Project
         'New-OktaToEntraProject'
         'Get-OktaToEntraProject'
+        'Select-OktaToEntraProject'
         'Select-OktaToEntraProject'
         'Update-ProjectSettings'
         # Okta

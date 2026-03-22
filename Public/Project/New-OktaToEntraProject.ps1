@@ -40,10 +40,10 @@ function New-OktaToEntraProject {
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$OktaDomain,
-        [Parameter(Mandatory)][string]$OktaApiToken,
+        [Parameter(Mandatory)][SecureString]$OktaApiToken,
         [Parameter(Mandatory)][string]$EntraTenantId,
         [Parameter(Mandatory)][string]$EntraClientId,
-        [Parameter(Mandatory)][string]$EntraClientSecret
+        [Parameter(Mandatory)][SecureString]$EntraClientSecret
     )
 
     Write-Header "Creating New Project: $Name"

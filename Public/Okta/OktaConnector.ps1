@@ -17,7 +17,7 @@ function Test-OktaConnection {
     [CmdletBinding()]
     param(
         [string]$OktaDomain,
-        [string]$ApiToken,
+        [SecureString]$ApiToken,
         [switch]$Silent
     )
 

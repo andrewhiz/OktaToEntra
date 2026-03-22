@@ -1,143 +1,100 @@
 # Private/Vault.ps1
-# Credential storage — DPAPI primary, SecretManagement optional.
-# Written for PowerShell 5.1 compatibility — no null-coalescing, no inline assignments.
+# Credential storage using Microsoft.PowerShell.SecretManagement + SecretStore.
+# Requires PS7.2+. SecretStore is a mandatory dependency — run Install-OktaToEntra.ps1
+# to install it if not already present.
+#
+# Secrets are stored as SecureString and returned as SecureString.
+# They are only unpacked to plaintext at the point of use (inside HTTP helpers).
 
 $script:VaultName = 'OktaToEntra'
-$script:VaultChecked = $false
-$script:VaultAvailable = $false
-
-function Test-VaultAvailable {
-    if ($script:VaultChecked) {
-        return $script:VaultAvailable
-    }
-    $script:VaultChecked = $true
-    try {
-        $mod = Get-Module -ListAvailable -Name 'Microsoft.PowerShell.SecretManagement' -ErrorAction SilentlyContinue
-        if ($mod) {
-            $minVersion = [version]'1.1.0'
-            $goodVersion = $mod | Where-Object { $_.Version -ge $minVersion }
-            if ($goodVersion) {
-                Import-Module 'Microsoft.PowerShell.SecretManagement' -ErrorAction Stop
-                $script:VaultAvailable = $true
-            }
-        }
-    } catch {
-        $script:VaultAvailable = $false
-    }
-    return $script:VaultAvailable
-}
-
-function Get-SecretsFilePath {
-    param([string]$ProjectId)
-    $root = Join-Path $env:APPDATA 'OktaToEntra'
-    return Join-Path $root "$ProjectId\secrets.json"
-}
 
 function Initialize-Vault {
-    if (-not (Test-VaultAvailable)) {
-        Write-Verbose 'SecretManagement not available — DPAPI file storage will be used.'
-        return
-    }
+    <#
+    .SYNOPSIS
+        Ensures the OktaToEntra SecretStore vault is registered and configured.
+        Called once during New-OktaToEntraProject. Throws on failure.
+    #>
+
+    # Configure SecretStore to use no additional master password — DPAPI (Windows) or
+    # the OS keyring (Linux/macOS) already encrypts the store at rest. An extra password
+    # would block unattended script execution and is unnecessary for a single-user tool.
     try {
-        $existing = Get-SecretVault -Name $script:VaultName -ErrorAction SilentlyContinue
-        if (-not $existing) {
+        $storeConfig = Get-SecretStoreConfiguration -ErrorAction Stop
+        if ($storeConfig.Authentication -ne 'None') {
+            Set-SecretStoreConfiguration -Authentication None -Confirm:$false -ErrorAction Stop
+        }
+    } catch {
+        # SecretStore may not be configured yet on first run — that is fine, continue.
+        Write-Verbose "SecretStore configuration check skipped: $_"
+    }
+
+    $existing = Get-SecretVault -Name $script:VaultName -ErrorAction SilentlyContinue
+    if (-not $existing) {
+        try {
             Register-SecretVault -Name $script:VaultName `
                 -ModuleName 'Microsoft.PowerShell.SecretStore' `
                 -DefaultVault -ErrorAction Stop
+            Write-Verbose "Registered SecretStore vault '$($script:VaultName)'."
+        } catch {
+            throw (
+                "Failed to register SecretStore vault '$($script:VaultName)'. " +
+                "Ensure Microsoft.PowerShell.SecretStore is installed:`n" +
+                "  Install-Module Microsoft.PowerShell.SecretStore -Scope CurrentUser`n$_"
+            )
         }
-    } catch {
-        Write-Verbose "SecretStore registration failed: $_ Falling back to DPAPI."
-        $script:VaultAvailable = $false
     }
 }
 
 function Set-ProjectSecret {
+    <#
+    .SYNOPSIS
+        Stores a secret (as SecureString) in the SecretStore vault for the given project.
+    #>
     param(
-        [Parameter(Mandatory=$true)][string]$ProjectId,
-        [Parameter(Mandatory=$true)][string]$SecretType,
-        [Parameter(Mandatory=$true)][string]$Value
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$SecretType,
+        [Parameter(Mandatory)][SecureString]$Value
     )
 
-    # Try vault first
-    if (Test-VaultAvailable) {
-        $key = "OktaToEntra_${ProjectId}_${SecretType}"
-        try {
-            Set-Secret -Name $key -Secret $Value -Vault $script:VaultName -ErrorAction Stop
-            return
-        } catch {
-            Write-Verbose "Vault write failed, using DPAPI: $_"
-            $script:VaultAvailable = $false
-        }
+    $key = "OktaToEntra_${ProjectId}_${SecretType}"
+    try {
+        Set-Secret -Name $key -Secret $Value -Vault $script:VaultName -ErrorAction Stop
+    } catch {
+        throw "Failed to store secret '$SecretType' in vault '$($script:VaultName)': $_"
     }
-
-    # DPAPI fallback
-    $filePath = Get-SecretsFilePath -ProjectId $ProjectId
-    $dir = Split-Path $filePath -Parent
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-    }
-
-    if (Test-Path $filePath) {
-        $obj = Get-Content $filePath -Raw | ConvertFrom-Json
-    } else {
-        $obj = New-Object PSObject
-    }
-
-    $encrypted = ConvertTo-SecureString -String $Value -AsPlainText -Force | ConvertFrom-SecureString
-    $obj | Add-Member -NotePropertyName $SecretType -NotePropertyValue $encrypted -Force
-    $obj | ConvertTo-Json | Set-Content -Path $filePath -Encoding UTF8
 }
 
 function Get-ProjectSecret {
+    <#
+    .SYNOPSIS
+        Retrieves a secret from the SecretStore vault as a SecureString.
+        Returns $null if the secret does not exist.
+    #>
     param(
-        [Parameter(Mandatory=$true)][string]$ProjectId,
-        [Parameter(Mandatory=$true)][string]$SecretType
+        [Parameter(Mandatory)][string]$ProjectId,
+        [Parameter(Mandatory)][string]$SecretType
     )
 
-    # Try vault first
-    if (Test-VaultAvailable) {
-        $key = "OktaToEntra_${ProjectId}_${SecretType}"
-        try {
-            $val = Get-Secret -Name $key -Vault $script:VaultName -AsPlainText -ErrorAction Stop
-            if ($val) { return $val }
-        } catch {
-            Write-Verbose "Vault read failed, trying DPAPI: $_"
-        }
-    }
-
-    # DPAPI fallback
-    $filePath = Get-SecretsFilePath -ProjectId $ProjectId
-    if (-not (Test-Path $filePath)) {
-        return $null
-    }
-
+    $key = "OktaToEntra_${ProjectId}_${SecretType}"
     try {
-        $obj = Get-Content $filePath -Raw | ConvertFrom-Json
-        $encrypted = $obj.$SecretType
-        if (-not $encrypted) { return $null }
-        $secure = $encrypted | ConvertTo-SecureString
-        $cred = New-Object System.Net.NetworkCredential('placeholder', $secure)
-        return $cred.Password
+        return Get-Secret -Name $key -Vault $script:VaultName -ErrorAction Stop
     } catch {
-        Write-Verbose "DPAPI read failed for $SecretType : $_"
-        return $null
+        if ($_.Exception.Message -match 'not found|does not exist|No secret') {
+            return $null
+        }
+        throw "Failed to retrieve secret '$SecretType' from vault: $_"
     }
 }
 
 function Remove-ProjectSecrets {
-    param([Parameter(Mandatory=$true)][string]$ProjectId)
+    <#
+    .SYNOPSIS
+        Removes all stored secrets for the given project from the vault.
+    #>
+    param([Parameter(Mandatory)][string]$ProjectId)
 
-    if (Test-VaultAvailable) {
-        foreach ($type in @('OktaApiToken','GraphClientSecret','GraphCertThumb')) {
-            $key = "OktaToEntra_${ProjectId}_${type}"
-            try {
-                Remove-Secret -Name $key -Vault $script:VaultName -ErrorAction SilentlyContinue
-            } catch { }
-        }
-    }
-
-    $filePath = Get-SecretsFilePath -ProjectId $ProjectId
-    if (Test-Path $filePath) {
-        Remove-Item $filePath -Force
+    foreach ($type in @('OktaApiToken', 'GraphClientSecret', 'GraphCertThumb')) {
+        $key = "OktaToEntra_${ProjectId}_${type}"
+        Remove-Secret -Name $key -Vault $script:VaultName -ErrorAction SilentlyContinue
     }
 }
