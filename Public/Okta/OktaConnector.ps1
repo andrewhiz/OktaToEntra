@@ -247,7 +247,7 @@ UPDATE okta_apps SET
     raw_json=@json, last_synced=@now
 WHERE project_id=@pid AND okta_app_id=@oid
 "@ -SqlParameters @{
-                label=($app.label ?? $app.name); mode=$app.signOnMode; status=$app.status
+                label=($app.label ?? $app.name); mode=($app.signOnMode ?? 'UNKNOWN'); status=$app.status
                 login=$loginUrl; ruris=$redirectUris; aud=$audience; eid=$entityId
                 meta=$metadataUrl; ausers=$userCount; agroups=$groupCount
                 attype=$attrType; attempl=$attrTemplate; atres=$attrResolved; atsuffix=$attrSuffix
@@ -278,7 +278,7 @@ VALUES
      @json,@now)
 "@ -SqlParameters @{
                 id=$rowId; pid=$projectId; oid=$app.id
-                label=($app.label ?? $app.name); mode=$app.signOnMode; status=$app.status
+                label=($app.label ?? $app.name); mode=($app.signOnMode ?? 'UNKNOWN'); status=$app.status
                 login=$loginUrl; ruris=$redirectUris; aud=$audience; eid=$entityId
                 meta=$metadataUrl; ausers=$userCount; agroups=$groupCount
                 attype=$attrType; attempl=$attrTemplate; atres=$attrResolved; atsuffix=$attrSuffix
