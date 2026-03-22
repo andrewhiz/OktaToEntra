@@ -9,12 +9,13 @@ function Start-OktaToEntra {
     param()
 
     Clear-Host
-    Write-Host @"
-  ╔══════════════════════════════════════════════════════════╗
-  ║         OktaToEntra  —  Migration Management Tool       ║
-  ║                        v1.1                             ║
-  ╚══════════════════════════════════════════════════════════╝
-"@ -ForegroundColor Cyan
+    $verTag  = 'v' + ((Get-Module OktaToEntra -ErrorAction SilentlyContinue)?.Version?.ToString() ?? 'dev')
+    $padLeft = [int][math]::Floor((58 - $verTag.Length) / 2)
+    $verLine = $verTag.PadLeft($padLeft + $verTag.Length).PadRight(58)
+    Write-Host "  ╔══════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "  ║         OktaToEntra  —  Migration Management Tool       ║" -ForegroundColor Cyan
+    Write-Host "  ║$verLine║" -ForegroundColor Cyan
+    Write-Host "  ╚══════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 
     # Load project if none active
     if (-not $script:CurrentProject) {

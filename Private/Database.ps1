@@ -137,6 +137,12 @@ CREATE INDEX IF NOT EXISTS idx_migration_status      ON migration_items(status);
 CREATE INDEX IF NOT EXISTS idx_audit_project         ON audit_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_usage_app             ON app_usage_stats(okta_app_id);
 CREATE INDEX IF NOT EXISTS idx_usage_project         ON app_usage_stats(project_id);
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version     INTEGER NOT NULL,
+    applied_at  TEXT NOT NULL,
+    description TEXT
+);
 "@
 
     foreach ($stmt in ($schema -split ";\s*\n" | Where-Object { $_.Trim() })) {
@@ -205,7 +211,9 @@ function Invoke-DatabaseMigration {
     <#
     .SYNOPSIS
         Applies incremental schema changes to an existing database.
-        Safe to run multiple times (checks columns before adding).
+        Tracks applied migrations in the schema_version table so each
+        migration runs exactly once, regardless of how many times this
+        function is called. Safe to run on new or pre-existing databases.
     #>
     param([string]$DbPath)
 
@@ -218,23 +226,40 @@ function Invoke-DatabaseMigration {
         }
     }
 
-    # v1.1: Username attribute tracking
-    Add-ColumnIfMissing $DbPath 'okta_apps' 'username_attr_type'     'TEXT'
-    Add-ColumnIfMissing $DbPath 'okta_apps' 'username_attr_template' 'TEXT'
-    Add-ColumnIfMissing $DbPath 'okta_apps' 'username_attr_resolved' 'TEXT'
-    Add-ColumnIfMissing $DbPath 'okta_apps' 'username_attr_suffix'   'TEXT'
-
-    # v1.1: Entra claim mapping on migration items
-    Add-ColumnIfMissing $DbPath 'migration_items' 'entra_claim_attribute' 'TEXT'
-    Add-ColumnIfMissing $DbPath 'migration_items' 'entra_claim_notes'     'TEXT'
-    Add-ColumnIfMissing $DbPath 'migration_items' 'attr_risk_flag'        'TEXT'
-
-    # v1.2: Usage tracking on migration items
-    Add-ColumnIfMissing $DbPath 'migration_items' 'usage_flag'          'TEXT'
-    Add-ColumnIfMissing $DbPath 'migration_items' 'usage_last_gathered' 'TEXT'
-
-    # v1.2: app_usage_stats table (CREATE TABLE IF NOT EXISTS is idempotent)
+    # Ensure schema_version table exists (handles DBs created before this feature)
     Invoke-SqliteQuery -DataSource $DbPath -Query @"
+CREATE TABLE IF NOT EXISTS schema_version (
+    version     INTEGER NOT NULL,
+    applied_at  TEXT NOT NULL,
+    description TEXT
+);
+"@ | Out-Null
+
+    $row = Invoke-SqliteQuery -DataSource $DbPath -Query "SELECT MAX(version) AS v FROM schema_version"
+    [int]$ver = if ($null -ne $row.v -and $row.v -isnot [System.DBNull]) { [int]$row.v } else { 0 }
+
+    # ── Migration 1: Username attribute tracking + Entra claim mapping ──────────
+    if ($ver -lt 1) {
+        Add-ColumnIfMissing $DbPath 'okta_apps'       'username_attr_type'     'TEXT'
+        Add-ColumnIfMissing $DbPath 'okta_apps'       'username_attr_template' 'TEXT'
+        Add-ColumnIfMissing $DbPath 'okta_apps'       'username_attr_resolved' 'TEXT'
+        Add-ColumnIfMissing $DbPath 'okta_apps'       'username_attr_suffix'   'TEXT'
+        Add-ColumnIfMissing $DbPath 'migration_items' 'entra_claim_attribute'  'TEXT'
+        Add-ColumnIfMissing $DbPath 'migration_items' 'entra_claim_notes'      'TEXT'
+        Add-ColumnIfMissing $DbPath 'migration_items' 'attr_risk_flag'         'TEXT'
+        Invoke-SqliteQuery -DataSource $DbPath -Query @"
+INSERT INTO schema_version (version, applied_at, description)
+VALUES (1, @at, 'Username attribute tracking and Entra claim mapping')
+"@ -SqlParameters @{ at = (Get-UtcNow) } | Out-Null
+        $ver = 1
+        Write-Verbose "  DB migration 1 applied"
+    }
+
+    # ── Migration 2: Usage tracking columns + app_usage_stats table ─────────────
+    if ($ver -lt 2) {
+        Add-ColumnIfMissing $DbPath 'migration_items' 'usage_flag'          'TEXT'
+        Add-ColumnIfMissing $DbPath 'migration_items' 'usage_last_gathered' 'TEXT'
+        Invoke-SqliteQuery -DataSource $DbPath -Query @"
 CREATE TABLE IF NOT EXISTS app_usage_stats (
     id                    TEXT PRIMARY KEY,
     project_id            TEXT NOT NULL,
@@ -253,11 +278,15 @@ CREATE TABLE IF NOT EXISTS app_usage_stats (
     usage_flag            TEXT
 );
 "@ | Out-Null
+        Invoke-SqliteQuery -DataSource $DbPath -Query "CREATE INDEX IF NOT EXISTS idx_usage_app     ON app_usage_stats(okta_app_id);"  | Out-Null
+        Invoke-SqliteQuery -DataSource $DbPath -Query "CREATE INDEX IF NOT EXISTS idx_usage_project ON app_usage_stats(project_id);"   | Out-Null
+        Invoke-SqliteQuery -DataSource $DbPath -Query @"
+INSERT INTO schema_version (version, applied_at, description)
+VALUES (2, @at, 'Usage tracking columns and app_usage_stats table')
+"@ -SqlParameters @{ at = (Get-UtcNow) } | Out-Null
+        $ver = 2
+        Write-Verbose "  DB migration 2 applied"
+    }
 
-    Invoke-SqliteQuery -DataSource $DbPath -Query @"
-CREATE INDEX IF NOT EXISTS idx_usage_app     ON app_usage_stats(okta_app_id);
-"@ | Out-Null
-    Invoke-SqliteQuery -DataSource $DbPath -Query @"
-CREATE INDEX IF NOT EXISTS idx_usage_project ON app_usage_stats(project_id);
-"@ | Out-Null
+    Write-Verbose "Database schema version: $ver"
 }
