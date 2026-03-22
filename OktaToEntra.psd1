@@ -19,7 +19,6 @@
         'New-OktaToEntraProject'
         'Get-OktaToEntraProject'
         'Select-OktaToEntraProject'
-        'Select-OktaToEntraProject'
         'Update-ProjectSettings'
         # Okta
         'Test-OktaConnection'

@@ -29,12 +29,24 @@ function New-OktaToEntraProject {
         The client secret for the Graph App Registration.
 
     .EXAMPLE
+        # Interactive — secrets are prompted with masked input (recommended)
         New-OktaToEntraProject -Name "Contoso Migration" `
-            -OktaDomain "contoso.okta.com" `
-            -OktaApiToken "00abc..." `
-            -EntraTenantId "11111111-..." `
-            -EntraClientId "22222222-..." `
-            -EntraClientSecret "secretvalue"
+            -OktaDomain     "contoso.okta.com" `
+            -OktaApiToken   (Read-Host "Okta API Token"   -AsSecureString) `
+            -EntraTenantId  "11111111-0000-0000-0000-000000000000" `
+            -EntraClientId  "22222222-0000-0000-0000-000000000000" `
+            -EntraClientSecret (Read-Host "Entra Client Secret" -AsSecureString)
+
+    .EXAMPLE
+        # Scripted — convert a plaintext value to SecureString (e.g. from a pipeline or CI variable)
+        $token  = ConvertTo-SecureString $env:OKTA_API_TOKEN    -AsPlainText -Force
+        $secret = ConvertTo-SecureString $env:ENTRA_CLIENT_SECRET -AsPlainText -Force
+        New-OktaToEntraProject -Name "Contoso Migration" `
+            -OktaDomain        "contoso.okta.com" `
+            -OktaApiToken      $token `
+            -EntraTenantId     "11111111-0000-0000-0000-000000000000" `
+            -EntraClientId     "22222222-0000-0000-0000-000000000000" `
+            -EntraClientSecret $secret
     #>
     [CmdletBinding()]
     param(

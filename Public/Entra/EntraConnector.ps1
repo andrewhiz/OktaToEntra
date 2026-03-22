@@ -42,8 +42,10 @@ function Test-EntraConnection {
             Write-Info "  Checklist:"
             Write-Info "    1. App Registration exists in tenant $TenantId"
             Write-Info "    2. Client secret is current (check expiry in Azure Portal)"
-            Write-Info "    3. API permissions: Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All + Group.Read.All"
-            Write-Info "    4. Admin consent granted for all three permissions"
+            Write-Info "    3. API permissions (Application type, not Delegated):"
+            Write-Info "         Application.ReadWrite.All, AppRoleAssignment.ReadWrite.All"
+            Write-Info "         Group.Read.All, Organization.Read.All"
+            Write-Info "    4. Admin consent granted for all four permissions"
         }
         return $false
     }
@@ -56,9 +58,52 @@ function Test-EntraConnection {
         return $true
     } catch {
         if (-not $Silent) {
-            Write-Fail "Token acquired but Graph API call failed: $_"
-            if ("$_" -match '403|Forbidden') {
-                Write-Warn "  Cause : Permissions issue. Ensure admin consent is granted for all required permissions."
+            # Parse the structured Graph API error embedded in the thrown message.
+            # Invoke-GraphApi throws: "Graph API error [$code] on $url : {json}"
+            $graphErr  = $null
+            $rawMsg    = "$_"
+            if ($rawMsg -match 'Graph API error \[\d+\] on [^\s]+ : (\{.+\})$') {
+                try { $graphErr = $Matches[1] | ConvertFrom-Json } catch {}
+            }
+
+            $errCode   = $graphErr?.error?.code
+            $errMsg    = $graphErr?.error?.message
+            $requestId = $graphErr?.error?.innerError?.'request-id'
+
+            Write-Fail "Token acquired but Graph API call failed."
+            if ($errCode)   { Write-Info "  Error Code : $errCode" }
+            if ($errMsg)    { Write-Info "  Message    : $errMsg" }
+            if ($requestId) { Write-Info "  Request-ID : $requestId" }
+
+            switch ($errCode) {
+                'Authorization_RequestDenied' {
+                    Write-Warn "  Cause : One or more required Graph API permissions are missing or admin consent has not been granted."
+                    Write-Info "  Required Application permissions (all need admin consent):"
+                    Write-Info "    • Application.ReadWrite.All"
+                    Write-Info "    • AppRoleAssignment.ReadWrite.All"
+                    Write-Info "    • Group.Read.All"
+                    Write-Info "    • Organization.Read.All"
+                    Write-Info "  Azure Portal: App registrations → your app → API permissions → Grant admin consent"
+                }
+                'InvalidAuthenticationToken' {
+                    Write-Warn "  Cause : Access token is invalid or has expired."
+                    Write-Info "  Check the Client Secret hasn't expired: Azure Portal → App registrations → Certificates & secrets"
+                }
+                'Request_ResourceNotFound' {
+                    Write-Warn "  Cause : Resource not found. Verify Tenant ID '$TenantId' is correct."
+                }
+                'AuthenticationError' {
+                    Write-Warn "  Cause : Authentication failed. Ensure the app uses Application (not Delegated) permissions."
+                }
+                default {
+                    if ($errCode) {
+                        Write-Warn "  Detail: $errMsg"
+                    } elseif ($rawMsg -match '403|Forbidden') {
+                        Write-Warn "  Cause : Permissions issue. Ensure admin consent is granted for all required permissions."
+                    } else {
+                        Write-Warn "  Detail: $rawMsg"
+                    }
+                }
             }
         }
         return $false

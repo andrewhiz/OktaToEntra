@@ -28,6 +28,13 @@ function Test-OktaConnection {
         $ApiToken   = Get-ProjectSecret -ProjectId $script:CurrentProject.ProjectId -SecretType 'OktaApiToken'
     }
 
+    # Pre-flight: normalise domain format — strip protocol prefix and trailing slash
+    if ($OktaDomain -match '^https?://') {
+        $OktaDomain = $OktaDomain -replace '^https?://', ''
+        if (-not $Silent) { Write-Warn "Domain should not include 'https://'. Using: $OktaDomain" }
+    }
+    $OktaDomain = $OktaDomain.TrimEnd('/')
+
     if (-not $Silent) { Write-Info "Testing Okta connection to $OktaDomain ..." }
 
     try {
@@ -38,7 +45,62 @@ function Test-OktaConnection {
         }
         return $true
     } catch {
-        if (-not $Silent) { Write-Fail "Connection failed: $_" }
+        if (-not $Silent) {
+            # Parse the structured Okta error embedded in the thrown message.
+            # Invoke-OktaApi throws: "Okta API error [$statusCode] on $url : {json}"
+            $rawMsg     = "$_"
+            $statusCode = $null
+            $oktaErr    = $null
+            if ($rawMsg -match 'Okta API error \[(\d+)\] on [^\s]+ : (.+)$') {
+                $statusCode = $Matches[1]
+                try { $oktaErr = $Matches[2] | ConvertFrom-Json } catch {}
+            }
+
+            $errCode    = $oktaErr?.errorCode
+            $errSummary = $oktaErr?.errorSummary
+            $errCauses  = $oktaErr?.errorCauses
+
+            Write-Fail "Okta connection failed (domain: $OktaDomain)"
+            if ($statusCode) { Write-Info "  HTTP Status : $statusCode" }
+            if ($errCode)    { Write-Info "  Error Code  : $errCode" }
+            if ($errSummary) { Write-Info "  Summary     : $errSummary" }
+            if ($errCauses -and $errCauses.Count -gt 0) {
+                Write-Info "  Causes:"
+                foreach ($cause in @($errCauses)) {
+                    Write-Info "    • $($cause.errorSummary)"
+                }
+            }
+
+            switch ($errCode) {
+                'E0000011' {
+                    Write-Warn "  Cause : Invalid API token — it may have been deactivated or never activated."
+                    Write-Info "  Verify in Okta Admin: Security → API → Tokens"
+                }
+                'E0000006' {
+                    Write-Warn "  Cause : Insufficient permissions for this API token."
+                    Write-Info "  Ensure the token belongs to a user with API access rights."
+                }
+                'E0000095' {
+                    Write-Warn "  Cause : SSL is required. Domain must be accessed over HTTPS."
+                }
+                'E0000047' {
+                    Write-Warn "  Cause : Okta rate limit reached. Wait a moment and try again."
+                }
+                default {
+                    if (-not $errCode) {
+                        # No Okta error code — likely a network or DNS failure
+                        if ($rawMsg -match 'NameResolutionFailure|No such host|Name or service not known|Could not resolve') {
+                            Write-Warn "  Cause : Cannot resolve '$OktaDomain'. Check the domain name."
+                            Write-Info "  Expected format: myorg.okta.com  (no https://, no trailing slash)"
+                        } elseif ($rawMsg -match 'SSL|TLS|certificate') {
+                            Write-Warn "  Cause : SSL/TLS error connecting to '$OktaDomain'."
+                        } else {
+                            Write-Warn "  Detail: $rawMsg"
+                        }
+                    }
+                }
+            }
+        }
         return $false
     }
 }

@@ -15,8 +15,8 @@ function Update-ProjectSettings {
           - Entra Client Secret
 
         Config values (domain, tenant ID, client ID) are saved to config.json.
-        Secrets (API token, client secret) are saved to the encrypted DPAPI file
-        or SecretStore vault — never in plaintext.
+        Secrets (API token, client secret) are saved to the SecretStore vault
+        (Microsoft.PowerShell.SecretStore) — never stored in plaintext.
 
         Each change is tested immediately so you know whether the new value works
         before leaving the screen.
