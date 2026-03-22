@@ -273,8 +273,4 @@ function Invoke-SecureRead {
     return $secure
 }
 
-function Invoke-PausePrompt {
-    Write-Host ""
-    Write-Host "  Press Enter to continue..." -ForegroundColor DarkGray
-    Read-Host | Out-Null
-}
+# Invoke-PausePrompt is defined in Private/Helpers.ps1

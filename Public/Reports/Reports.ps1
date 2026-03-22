@@ -163,7 +163,7 @@ WHERE oa.project_id = @pid $whereExtra
 
         $pack = @{
             generatedAt      = Get-UtcNow
-            tool             = "OktaToEntra v1.0"
+            tool             = "OktaToEntra v$((Get-Module OktaToEntra -ErrorAction SilentlyContinue)?.Version?.ToString() ?? '?')"
             oktaApp          = @{
                 id           = $row.okta_app_id
                 label        = $row.label
@@ -361,7 +361,7 @@ $rowsHtml
     </tbody>
   </table>
 </div>
-<div class="footer">OktaToEntra v1.0 — Report generated $(Get-Date -Format "yyyy-MM-dd HH:mm")</div>
+<div class="footer">OktaToEntra v$((Get-Module OktaToEntra -ErrorAction SilentlyContinue)?.Version?.ToString() ?? '?') — Report generated $(Get-Date -Format "yyyy-MM-dd HH:mm")</div>
 </body>
 </html>
 "@

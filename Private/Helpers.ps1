@@ -62,6 +62,43 @@ function Confirm-Action {
     return ($response -ieq 'y')
 }
 
+function Invoke-PausePrompt {
+    Write-Host ""
+    Write-Host "  Press Enter to return to the menu..." -ForegroundColor DarkGray
+    Read-Host | Out-Null
+}
+
+function Invoke-PagedTable {
+    <#
+    .SYNOPSIS
+        Displays an array of pre-numbered objects in pages using Format-Table.
+        Prompts between pages. Rows must already have a 'Num' property.
+    #>
+    param(
+        [Parameter(Mandatory)][array]  $Rows,
+        [Parameter(Mandatory)][array]  $Columns,
+        [int]   $PageSize   = 20,
+        [string]$CountLabel = 'items'
+    )
+    if (-not $Rows -or $Rows.Count -eq 0) { return }
+
+    $totalPages = [math]::Ceiling($Rows.Count / $PageSize)
+
+    for ($page = 0; $page -lt $totalPages; $page++) {
+        $pageRows = $Rows | Select-Object -Skip ($page * $PageSize) -First $PageSize
+        $pageRows | Format-Table -AutoSize $Columns
+
+        if ($page -lt $totalPages - 1) {
+            Write-Host ("  Page {0}/{1}" -f ($page + 1), $totalPages) -ForegroundColor DarkGray -NoNewline
+            $next = Read-Host " — Enter for next page, Q to stop"
+            if ($next.Trim() -ieq 'q') { break }
+        }
+    }
+
+    Write-Host "  $($Rows.Count) $CountLabel" -ForegroundColor DarkGray
+    Write-Host ""
+}
+
 #endregion
 
 #region ── HTTP Helpers ─────────────────────────────────────────────────────────

@@ -63,7 +63,7 @@ foreach ($mod in $modules) {
 Write-Host ""
 Write-Host "  → Checking for existing OktaToEntra installations..." -ForegroundColor Cyan
 
-$installingVersion = '1.1.0'
+$installingVersion = (Import-PowerShellDataFile (Join-Path $PSScriptRoot 'OktaToEntra.psd1')).ModuleVersion
 $existingInstalls  = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 foreach ($searchPath in ($env:PSModulePath -split [System.IO.Path]::PathSeparator)) {
@@ -138,6 +138,34 @@ try {
 } catch {
     Write-Host "  ✗ Failed to copy module files: $_" -ForegroundColor Red
     exit 1
+}
+
+# ── Migrate existing project databases ────────────────────────────────────────
+$dataDir    = Join-Path $env:APPDATA "OktaToEntra"
+$projectDbs = @(Get-ChildItem -Path $dataDir -Recurse -Filter "project.db" -ErrorAction SilentlyContinue)
+
+if ($projectDbs.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  → Checking $($projectDbs.Count) project database(s) for schema updates..." -ForegroundColor Cyan
+
+    # Dot-source private DB helpers from the just-installed module so we can call
+    # Invoke-DatabaseMigration without needing the module fully loaded yet.
+    Import-Module PSSQLite -ErrorAction SilentlyContinue
+    . (Join-Path $moduleDest 'Private\Database.ps1')
+
+    foreach ($db in $projectDbs) {
+        $projectFolder = Split-Path $db.DirectoryName -Leaf
+        Write-Host "    • $projectFolder" -ForegroundColor DarkGray -NoNewline
+        try {
+            Invoke-DatabaseMigration -DbPath $db.FullName
+            Write-Host "  ✓" -ForegroundColor Green
+        } catch {
+            Write-Host "  ✗ $_" -ForegroundColor Red
+        }
+    }
+    Write-Host "  ✓ All databases up to date" -ForegroundColor Green
+} else {
+    Write-Host "  ✓ No existing project databases found" -ForegroundColor Green
 }
 
 # ── Initialise SecretStore vault ───────────────────────────────────────────────
