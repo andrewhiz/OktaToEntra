@@ -107,21 +107,28 @@ ORDER BY
         return
     }
 
-    $rows | Format-Table -AutoSize @(
-        @{ Label='App Name';    Expression={ $_.AppName };    Width=36 }
-        @{ Label='Protocol';   Expression={ $_.Protocol };   Width=14 }
-        @{ Label='Status';     Expression={ $_.Status };     Width=14 }
-        @{ Label='Pri';        Expression={ $_.Priority };   Width=7  }
+    # Add sequential row numbers for display and selection in option 7
+    $i = 0
+    $numbered = @($rows) | ForEach-Object {
+        $i++
+        $_ | Add-Member -NotePropertyName 'RowNum' -NotePropertyValue $i -PassThru
+    }
+
+    $columns = @(
+        @{ Label='#';          Expression={ $_.RowNum };    Width=4  }
+        @{ Label='App Name';   Expression={ $_.AppName };   Width=35 }
+        @{ Label='Protocol';   Expression={ $_.Protocol };  Width=14 }
+        @{ Label='Status';     Expression={ $_.Status };    Width=14 }
+        @{ Label='Pri';        Expression={ $_.Priority };  Width=7  }
         @{ Label='Owner';      Expression={ if ($_.Owner) { $_.Owner } else { '—' } }; Width=22 }
         @{ Label='Users';      Expression={ $_.OktaUsers };  Width=6  }
         @{ Label='Groups';     Expression={ $_.OktaGroups }; Width=7  }
-        @{ Label='Entra AppId'; Expression={
+        @{ Label='Entra';      Expression={
             if ($_.EntraAppId) { $_.EntraAppId.Substring(0,[math]::Min(8,$_.EntraAppId.Length))+'…' } else { '—' }
-        }; Width=12 }
+        }; Width=10 }
     )
 
-    Write-Host "  $($rows.Count) app(s) shown" -ForegroundColor DarkGray
-    Write-Host ""
+    Invoke-PagedTable -Rows $numbered -Columns $columns -PageSize 20 -CountLabel 'app(s) shown'
 }
 
 
@@ -156,6 +163,7 @@ function Update-MigrationItem {
     #>
     [CmdletBinding()]
     param(
+        [string[]]$ItemId,
         [string]$OktaAppId,
         [string]$Label,
         [ValidateSet('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE')]
@@ -172,7 +180,15 @@ function Update-MigrationItem {
     $projectId = $script:CurrentProject.ProjectId
 
     # ── Resolve items ──────────────────────────────────────────────────────────
-    if ($OktaAppId) {
+    if ($ItemId) {
+        # Direct selection by migration_item IDs (from interactive menu option 7)
+        $idList = ($ItemId | ForEach-Object { "'$_'" }) -join ','
+        $items  = Invoke-SqliteQuery -DataSource $dbPath -Query @"
+SELECT mi.id, mi.status, mi.notes, oa.label FROM migration_items mi
+JOIN okta_apps oa ON oa.id=mi.okta_app_id
+WHERE mi.project_id=@pid AND mi.id IN ($idList)
+"@ -SqlParameters @{ pid=$projectId }
+    } elseif ($OktaAppId) {
         $items = Invoke-SqliteQuery -DataSource $dbPath -Query @"
 SELECT mi.id, mi.status, mi.notes, oa.label FROM migration_items mi
 JOIN okta_apps oa ON oa.id=mi.okta_app_id
