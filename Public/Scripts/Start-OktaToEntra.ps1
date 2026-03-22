@@ -287,8 +287,76 @@ ORDER BY
             }
 
             '11' {
-                $oid = Read-Host "  Okta App ID"
-                New-EntraAppStub -OktaAppId $oid
+                if (-not $script:CurrentProject) {
+                    Write-Warn "No active project."
+                    Invoke-PausePrompt; break
+                }
+
+                # Default: show READY apps. Entering a search term removes the
+                # READY filter so the user can stub any app by label if needed.
+                Write-Host ""
+                Write-Host "  Showing READY apps by default." -ForegroundColor DarkGray
+                Write-Host "  Enter a search term to find apps of any status." -ForegroundColor DarkGray
+                $search = (Read-Host "  App search (or Enter for all READY)").Trim()
+
+                $dbPath    = Get-DbPath
+                $projectId = $script:CurrentProject.ProjectId
+
+                if ($search) {
+                    $whereClause = "WHERE mi.project_id=@pid AND oa.label LIKE @lbl"
+                    $sqlParams   = @{ pid = $projectId; lbl = "%$search%" }
+                } else {
+                    $whereClause = "WHERE mi.project_id=@pid AND mi.status='READY'"
+                    $sqlParams   = @{ pid = $projectId }
+                }
+
+                $found = Invoke-SqliteQuery -DataSource $dbPath -Query @"
+SELECT oa.okta_app_id  AS OktaId,
+       oa.label        AS AppName,
+       oa.sign_on_mode AS Protocol,
+       mi.status       AS Status,
+       mi.priority     AS Priority
+FROM migration_items mi
+JOIN okta_apps oa ON oa.id = mi.okta_app_id
+$whereClause
+ORDER BY
+    CASE mi.priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+    oa.label
+"@ -SqlParameters $sqlParams
+
+                if (-not $found -or $found.Count -eq 0) {
+                    $hint = if ($search) { "matching '$search'" } else { "with status READY" }
+                    Write-Warn "  No apps found $hint."
+                    Invoke-PausePrompt; break
+                }
+
+                $n = 0
+                $numbered = @($found) | ForEach-Object {
+                    $n++
+                    $_ | Add-Member -NotePropertyName 'Num' -NotePropertyValue $n -PassThru
+                }
+
+                $cols = @(
+                    @{ Label='#';        Expression={ $_.Num };      Width=4  }
+                    @{ Label='App Name'; Expression={ $_.AppName };  Width=36 }
+                    @{ Label='Protocol'; Expression={ $_.Protocol }; Width=14 }
+                    @{ Label='Status';   Expression={ $_.Status };   Width=14 }
+                    @{ Label='Pri';      Expression={ $_.Priority };  Width=7 }
+                )
+                Invoke-PagedTable -Rows $numbered -Columns $cols -PageSize 20 -CountLabel 'app(s)'
+
+                $sel = (Read-Host "  Enter # to create stub for").Trim()
+                if (-not $sel -or $sel -notmatch '^\d+$') { Invoke-PausePrompt; break }
+
+                $selected = $numbered | Where-Object { $_.Num -eq [int]$sel } | Select-Object -First 1
+                if (-not $selected) {
+                    Write-Warn "  Invalid selection."
+                    Invoke-PausePrompt; break
+                }
+
+                Write-Host ""
+                Write-Host "  Creating stub for: $($selected.AppName)" -ForegroundColor Cyan
+                New-EntraAppStub -OktaAppId $selected.OktaId
                 Invoke-PausePrompt
             }
 
