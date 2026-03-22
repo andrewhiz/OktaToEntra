@@ -214,16 +214,45 @@ WHERE oa.project_id = @pid $whereExtra
                 owner        = $row.owner_email
                 notes        = $row.notes
             }
-            configurationChecklist = @(
-                @{ step=1; task="Verify app registration display name and identifier URI";   done=$false }
-                @{ step=2; task="Configure SSO: import SAML metadata or set OIDC client ID"; done=$false }
+            swaData = if ($row.sign_on_mode -in @('BOOKMARK','AUTO_LOGIN','SECURE_PASSWORD_STORE','BROWSER_PLUGIN','BASIC_AUTH')) {
+                $swaRaw      = $row.raw_json | ConvertFrom-Json -ErrorAction SilentlyContinue
+                $swaSettings = if ($swaRaw) { $swaRaw.settings.app } else { $null }
+                @{
+                    appUrl        = if ($swaSettings) { $swaSettings.url }                              else { $null }
+                    loginUrl      = if ($swaSettings) { $swaSettings.loginUrl ?? $swaSettings.url }     else { $null }
+                    authUrl       = if ($swaSettings) { $swaSettings.authURL }                          else { $null }
+                    usernameField = if ($swaSettings) { $swaSettings.usernameField }                    else { $null }
+                    passwordField = if ($swaSettings) { $swaSettings.passwordField }                    else { $null }
+                    # All fields needed for a future New-EntraBookmarkApp implementation
+                    entraNote     = 'Use loginUrl/appUrl as the Entra My Apps bookmark URL when migrating this app.'
+                }
+            } else { $null }
+            configurationChecklist = if ($row.sign_on_mode -eq 'BOOKMARK') { @(
+                @{ step=1; task="Verify bookmark URL (swaData.appUrl) is current and accessible";        done=$false }
+                @{ step=2; task="Create Entra My Apps bookmark app using swaData.appUrl";                done=$false }
+                @{ step=3; task="Assign users and groups to Entra bookmark app";                         done=$false }
+                @{ step=4; task="Verify bookmark appears correctly in user My Apps portal";              done=$false }
+                @{ step=5; task="Update migration status to VALIDATED";                                  done=$false }
+                @{ step=6; task="Confirm Okta app can be decommissioned, set to COMPLETE";               done=$false }
+            )} elseif ($row.sign_on_mode -in @('AUTO_LOGIN','SECURE_PASSWORD_STORE','BROWSER_PLUGIN','BASIC_AUTH')) { @(
+                @{ step=1; task="Determine approach: upgrade to federated SSO or migrate as Entra bookmark"; done=$false }
+                @{ step=2; task="If SSO upgrade: check vendor support for SAML/OIDC and configure";         done=$false }
+                @{ step=3; task="If Entra bookmark: create app using swaData.loginUrl";                     done=$false }
+                @{ step=4; task="Configure credential management (Entra SSO for basic auth, or manual)";    done=$false }
+                @{ step=5; task="Assign users and groups";                                                  done=$false }
+                @{ step=6; task="Test access with a pilot user";                                            done=$false }
+                @{ step=7; task="Update migration status to VALIDATED";                                     done=$false }
+                @{ step=8; task="Confirm Okta app can be decommissioned, set to COMPLETE";                  done=$false }
+            )} else { @(
+                @{ step=1; task="Verify app registration display name and identifier URI";                   done=$false }
+                @{ step=2; task="Configure SSO: import SAML metadata or set OIDC client ID";                done=$false }
                 @{ step=3; task="Configure claim: set NameID / sub to '$($row.entra_claim_attribute ?? "TBD — see usernameAttribute.entraClaimAttr")'"; done=$false }
-                @{ step=4; task="Map additional claims / attributes from Okta attribute statements"; done=$false }
-                @{ step=5; task="Assign users and groups (automated via Add-EntraAppAssignment)"; done=$false }
-                @{ step=6; task="Test SSO login with a pilot user — verify correct attribute sent"; done=$false }
-                @{ step=7; task="Update migration status to VALIDATED";                      done=$false }
-                @{ step=8; task="Confirm Okta app can be decommissioned, set to COMPLETE";   done=$false }
-            )
+                @{ step=4; task="Map additional claims / attributes from Okta attribute statements";         done=$false }
+                @{ step=5; task="Assign users and groups (automated via Add-EntraAppAssignment)";           done=$false }
+                @{ step=6; task="Test SSO login with a pilot user — verify correct attribute sent";         done=$false }
+                @{ step=7; task="Update migration status to VALIDATED";                                     done=$false }
+                @{ step=8; task="Confirm Okta app can be decommissioned, set to COMPLETE";                  done=$false }
+            )}
         }
 
         $pack | ConvertTo-Json -Depth 15 | Set-Content $filePath -Encoding UTF8

@@ -170,7 +170,7 @@ function Sync-OktaApps {
         } catch { <# non-fatal #> }
 
         # ── Extract SSO metadata ─────────────────────────────────────────────
-        $loginUrl    = $app.settings?.app?.loginUrl
+        $loginUrl    = $app.settings?.app?.loginUrl ?? $app.settings?.app?.url
         $audience    = $app.settings?.signOn?.audience
         $entityId    = $app.settings?.signOn?.entityId ?? $app.settings?.signOn?.issuer
         $metadataUrl = $null
@@ -218,14 +218,35 @@ function Sync-OktaApps {
         }
 
         # ── Determine risk flag ───────────────────────────────────────────────
-        # HIGH:   custom expressions or SAM/UPN — likely to differ between users
-        # MEDIUM: email when org has mixed email/UPN, or suffix appended
-        # LOW:    standard UPN/email with no suffix
-        $riskFlag = switch -Regex ($attrResolved) {
-            'SAM Account Name|windowsUPN|Custom:|Employee Number|strip domain' { 'HIGH'   }
-            "suffix|user\.upn|UPN \(user"                                      { 'MEDIUM' }
-            'Not configured'                                                   { 'HIGH'   }
-            default                                                            { 'LOW'    }
+        # For non-SSO app types the attribute-mapping risk concept doesn't apply;
+        # risk instead reflects migration complexity for that app type.
+        $signOnMode = $app.signOnMode ?? 'UNKNOWN'
+        $riskFlag = switch ($signOnMode) {
+            'BOOKMARK'              { 'LOW'    }   # URL bookmark — straightforward Entra bookmark migration
+            'AUTO_LOGIN'            { 'MEDIUM' }   # SWA stored credentials — migration approach needed
+            'SECURE_PASSWORD_STORE' { 'MEDIUM' }
+            'BROWSER_PLUGIN'        { 'MEDIUM' }
+            'BASIC_AUTH'            { 'MEDIUM' }
+            'UNKNOWN'               { 'LOW'    }
+            default {
+                # Federated SSO types — use attribute mapping risk
+                switch -Regex ($attrResolved ?? '') {
+                    'SAM Account Name|windowsUPN|Custom:|Employee Number|strip domain' { 'HIGH'   }
+                    "suffix|user\.upn|UPN \(user"                                      { 'MEDIUM' }
+                    'Not configured'                                                   { 'HIGH'   }
+                    default                                                            { 'LOW'    }
+                }
+            }
+        }
+
+        # ── Auto migration note for non-SSO app types (new apps only) ─────────
+        $autoNote = switch ($signOnMode) {
+            'BOOKMARK'              { 'Bookmark app — migrate as an Entra My Apps bookmark using the captured URL.' }
+            'AUTO_LOGIN'            { 'SWA Auto Login — stored credentials. Evaluate replacing with federated SSO or migrate as an Entra bookmark with separate credential management.' }
+            'SECURE_PASSWORD_STORE' { 'SWA Secure Password Store — stored credentials. Evaluate replacing with federated SSO or migrate as an Entra bookmark.' }
+            'BROWSER_PLUGIN'        { 'SWA Browser Plugin — stored credentials. Evaluate replacing with federated SSO or migrate as an Entra bookmark.' }
+            'BASIC_AUTH'            { 'Basic Auth app — uses HTTP Basic Authentication. Evaluate replacing with federated SSO.' }
+            default                 { $null }
         }
 
         $rawJson = $app | ConvertTo-Json -Depth 10 -Compress
@@ -285,11 +306,11 @@ VALUES
                 json=$rawJson; now=$now
             } | Out-Null
 
-            # Create migration item with risk flag pre-populated
+            # Create migration item with risk flag and auto-generated note pre-populated
             Invoke-SqliteQuery -DataSource $dbPath -Query @"
-INSERT INTO migration_items (id,project_id,okta_app_id,status,priority,attr_risk_flag,created_at,updated_at)
-VALUES (@id,@pid,@aid,'DISCOVERED','MEDIUM',@risk,@now,@now)
-"@ -SqlParameters @{ id=(New-Guid); pid=$projectId; aid=$rowId; risk=$riskFlag; now=$now } | Out-Null
+INSERT INTO migration_items (id,project_id,okta_app_id,status,priority,attr_risk_flag,notes,created_at,updated_at)
+VALUES (@id,@pid,@aid,'DISCOVERED','MEDIUM',@risk,@notes,@now,@now)
+"@ -SqlParameters @{ id=(New-Guid); pid=$projectId; aid=$rowId; risk=$riskFlag; notes=$autoNote; now=$now } | Out-Null
 
             $new++
         }
