@@ -1,0 +1,17 @@
+# Project databases — contain migration data, never commit
+*.db
+*.db-shm
+*.db-wal
+
+# SecretStore vault files (if they ever land locally)
+*.vault
+
+# PowerShell test output
+TestResults/
+*.testresult.xml
+
+# Editor and OS noise
+.vscode/
+*.suo
+Thumbs.db
+Desktop.ini
