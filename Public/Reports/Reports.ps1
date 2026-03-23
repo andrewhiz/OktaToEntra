@@ -272,11 +272,11 @@ function Build-HtmlReport {
     param([array]$Rows, [string]$ProjectName)
 
     $statusCounts = @{}
-    foreach ($s in @('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE')) {
+    foreach ($s in @('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE','IGNORE')) {
         $statusCounts[$s] = ($Rows | Where-Object { $_.MigrationStatus -eq $s }).Count
     }
     $total   = $Rows.Count
-    $pct     = if ($total -gt 0) { [math]::Round($statusCounts['COMPLETE'] / $total * 100, 0) } else { 0 }
+    $pct     = if ($total -gt 0) { [math]::Round(($statusCounts['COMPLETE'] + $statusCounts['IGNORE']) / $total * 100, 0) } else { 0 }
 
     $rowsHtml = ($Rows | ForEach-Object {
         $statusColors = @{
@@ -286,6 +286,7 @@ function Build-HtmlReport {
             'IN_PROGRESS'  = '#fd7e14'
             'VALIDATED'    = '#198754'
             'COMPLETE'     = '#212529'
+            'IGNORE'       = '#adb5bd'
         }
         $priColors = @{ 'HIGH'='#dc3545'; 'MEDIUM'='#ffc107'; 'LOW'='#198754' }
         $sc = $statusColors[$_.MigrationStatus] ?? '#6c757d'
@@ -373,8 +374,9 @@ function Build-HtmlReport {
     <div class="card"><div class="num" style="color:#fd7e14">$($statusCounts['IN_PROGRESS'])</div><div class="lbl">In Progress</div></div>
     <div class="card"><div class="num" style="color:#198754">$($statusCounts['VALIDATED'])</div><div class="lbl">Validated</div></div>
     <div class="card"><div class="num" style="color:#212529">$($statusCounts['COMPLETE'])</div><div class="lbl">Complete</div></div>
+    <div class="card"><div class="num" style="color:#adb5bd">$($statusCounts['IGNORE'])</div><div class="lbl">Ignored</div></div>
   </div>
-  <div class="pct-label">$pct% Complete</div>
+  <div class="pct-label">$pct% Complete / Ignored</div>
   <div class="progress-bar"><div class="progress-fill" style="width:$pct%"></div></div>
   <table>
     <thead>

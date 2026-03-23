@@ -48,6 +48,7 @@ function Write-StatusBadge {
         'IN_PROGRESS'   = 'Yellow'
         'VALIDATED'     = 'Green'
         'COMPLETE'      = 'White'
+        'IGNORE'        = 'DarkGray'
     }
     $c = $colors[$Status]
     if (-not $c) { $c = 'Gray' }
@@ -86,7 +87,7 @@ function Invoke-PagedTable {
 
     for ($page = 0; $page -lt $totalPages; $page++) {
         $pageRows = $Rows | Select-Object -Skip ($page * $PageSize) -First $PageSize
-        $pageRows | Format-Table -AutoSize $Columns
+        $pageRows | Format-Table -AutoSize $Columns | Out-Host
 
         if ($page -lt $totalPages - 1) {
             Write-Host ("  Page {0}/{1}" -f ($page + 1), $totalPages) -ForegroundColor DarkGray -NoNewline
@@ -310,12 +311,131 @@ function Format-AppTable {
 
 function ConvertTo-StatusSummary {
     param([array]$Items)
-    $statuses = @('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE')
+    $statuses = @('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE','IGNORE')
     $summary  = [ordered]@{}
     foreach ($s in $statuses) {
         $summary[$s] = ($Items | Where-Object { $_.status -eq $s }).Count
     }
     return $summary
+}
+
+function Invoke-AppPicker {
+    <#
+    .SYNOPSIS
+        Interactive app search → paged numbered list → selection helper.
+        Returns an array of selected row objects.
+
+    .PARAMETER DbPath
+        Path to the project SQLite database.
+
+    .PARAMETER ProjectId
+        The project ID to scope the query.
+
+    .PARAMETER Prompt
+        Text shown to the user before the search input.
+
+    .PARAMETER FilterStatus
+        If provided, only show apps with one of these statuses.
+
+    .PARAMETER MultiSelect
+        Allow comma-separated numbers or 'all'. Otherwise single selection only.
+
+    .PARAMETER IncludeIgnored
+        By default IGNORE-status apps are hidden. Set this switch to include them.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$DbPath,
+        [Parameter(Mandatory)][string]$ProjectId,
+        [string]  $Prompt        = "App search (partial label, or Enter for all)",
+        [string[]]$FilterStatus,
+        [switch]  $MultiSelect,
+        [switch]  $IncludeIgnored
+    )
+
+    Write-Host ""
+    $search = (Read-Host "  $Prompt  (Enter for all)").Trim()
+
+    $whereClause = "WHERE mi.project_id=@pid"
+    $sqlParams   = @{ pid = $ProjectId }
+
+    if ($FilterStatus -and $FilterStatus.Count -gt 0) {
+        $inList = ($FilterStatus | ForEach-Object { "'$_'" }) -join ','
+        $whereClause += " AND mi.status IN ($inList)"
+    } elseif (-not $IncludeIgnored) {
+        $whereClause += " AND mi.status != 'IGNORE'"
+    }
+
+    if ($search) {
+        $whereClause += " AND oa.label LIKE @lbl"
+        $sqlParams.lbl = "%$search%"
+    }
+
+    $found = Invoke-SqliteQuery -DataSource $DbPath -Query @"
+SELECT mi.id              AS ItemId,
+       oa.okta_app_id     AS OktaId,
+       oa.label           AS AppName,
+       oa.sign_on_mode    AS Protocol,
+       mi.status          AS Status,
+       mi.priority        AS Priority,
+       mi.usage_flag      AS UsageFlag,
+       mi.owner_email     AS Owner
+FROM migration_items mi
+JOIN okta_apps oa ON oa.id = mi.okta_app_id
+$whereClause
+ORDER BY
+    CASE mi.priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
+    CASE mi.status WHEN 'DISCOVERED' THEN 1 WHEN 'READY' THEN 2 WHEN 'STUB_CREATED' THEN 3
+                   WHEN 'IN_PROGRESS' THEN 4 WHEN 'VALIDATED' THEN 5 WHEN 'COMPLETE' THEN 6
+                   WHEN 'IGNORE' THEN 7 ELSE 8 END,
+    oa.label
+"@ -SqlParameters $sqlParams
+
+    if (-not $found -or $found.Count -eq 0) {
+        Write-Warn "No apps found$(if ($search) { " matching '$search'" })."
+        return $null
+    }
+
+    $n = 0
+    $numbered = @($found) | ForEach-Object {
+        $n++
+        $_ | Add-Member -NotePropertyName 'Num' -NotePropertyValue $n -PassThru
+    }
+
+    $cols = @(
+        @{ Label='#';        Expression={ $_.Num };       Width=4  }
+        @{ Label='App Name'; Expression={ $_.AppName };   Width=36 }
+        @{ Label='Protocol'; Expression={ $_.Protocol };  Width=14 }
+        @{ Label='Status';   Expression={ $_.Status };    Width=14 }
+        @{ Label='Usage';    Expression={ if ($_.UsageFlag) { $_.UsageFlag } else { '—' } }; Width=10 }
+        @{ Label='Pri';      Expression={ $_.Priority };  Width=7  }
+        @{ Label='Owner';    Expression={ if ($_.Owner) { $_.Owner } else { '—' } }; Width=22 }
+    )
+    Invoke-PagedTable -Rows $numbered -Columns $cols -PageSize 20 -CountLabel 'app(s)'
+
+    if ($MultiSelect) {
+        $sel = (Read-Host "  Enter #(s) to select (e.g. 1,3 or 'all')  [B] Back").Trim()
+        if (-not $sel -or $sel -ieq 'b') { return $null }
+        $selected = if ($sel -ieq 'all') {
+            $numbered
+        } else {
+            $selNums = $sel -split ',' |
+                       ForEach-Object { $_.Trim() } |
+                       Where-Object   { $_ -match '^\d+$' } |
+                       ForEach-Object { [int]$_ }
+            @($numbered | Where-Object { $_.Num -in $selNums })
+        }
+    } else {
+        $sel = (Read-Host "  Enter # to select  [B] Back").Trim()
+        if (-not $sel -or $sel -ieq 'b' -or $sel -notmatch '^\d+$') { return $null }
+        $selected = @($numbered | Where-Object { $_.Num -eq [int]$sel } | Select-Object -First 1)
+    }
+
+    if (-not $selected -or $selected.Count -eq 0) {
+        Write-Warn "No valid selection."
+        return $null
+    }
+
+    return $selected
 }
 
 #endregion

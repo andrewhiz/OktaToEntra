@@ -4,8 +4,8 @@
 
 | | |
 |---|---|
-| **Module version** | 2026.3.1 |
-| **DB schema version** | 2 |
+| **Module version** | 2026.3.2 |
+| **DB schema version** | 3 |
 
 ---
 

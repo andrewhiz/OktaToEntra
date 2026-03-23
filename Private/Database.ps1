@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS migration_items (
     -- Usage tracking (populated by Get-OktaAppUsage)
     usage_flag              TEXT,    -- ACTIVE | LOW_USAGE | INACTIVE | UNKNOWN
     usage_last_gathered     TEXT,    -- when usage was last pulled
+    -- Ignore tracking
+    ignore_reason           TEXT,    -- free-text reason why this app will not be migrated
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
     FOREIGN KEY (project_id) REFERENCES projects(id),
@@ -286,6 +288,17 @@ VALUES (2, @at, 'Usage tracking columns and app_usage_stats table')
 "@ -SqlParameters @{ at = (Get-UtcNow) } | Out-Null
         $ver = 2
         Write-Verbose "  DB migration 2 applied"
+    }
+
+    # ── Migration 3: IGNORE status — ignore_reason column ───────────────────────
+    if ($ver -lt 3) {
+        Add-ColumnIfMissing $DbPath 'migration_items' 'ignore_reason' 'TEXT'
+        Invoke-SqliteQuery -DataSource $DbPath -Query @"
+INSERT INTO schema_version (version, applied_at, description)
+VALUES (3, @at, 'IGNORE status — ignore_reason column on migration_items')
+"@ -SqlParameters @{ at = (Get-UtcNow) } | Out-Null
+        $ver = 3
+        Write-Verbose "  DB migration 3 applied"
     }
 
     Write-Verbose "Database schema version: $ver"

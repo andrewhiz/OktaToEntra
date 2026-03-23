@@ -1,6 +1,6 @@
 # Public/Migration/MigrationPlanner.ps1
 
-$script:ValidStatuses  = @('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE')
+$script:ValidStatuses  = @('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE','IGNORE')
 $script:ValidPriorities = @('HIGH','MEDIUM','LOW')
 
 function Get-MigrationStatus {
@@ -25,7 +25,7 @@ function Get-MigrationStatus {
     #>
     [CmdletBinding()]
     param(
-        [ValidateSet('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE')]
+        [ValidateSet('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE','IGNORE')]
         [string]$Status,
         [string]$Owner,
         [string]$Protocol,
@@ -51,11 +51,12 @@ GROUP BY mi.status
 
     $total    = ($summary | Measure-Object -Property cnt -Sum).Sum
     $complete = ($summary | Where-Object { $_.status -eq 'COMPLETE' } | Measure-Object -Property cnt -Sum).Sum
-    $pct      = if ($total -gt 0) { [math]::Round($complete / $total * 100, 0) } else { 0 }
+    $ignored  = ($summary | Where-Object { $_.status -eq 'IGNORE'   } | Measure-Object -Property cnt -Sum).Sum
+    $pct      = if ($total -gt 0) { [math]::Round(($complete + $ignored) / $total * 100, 0) } else { 0 }
 
     Write-Header "Migration Status — $($script:CurrentProject.Name)"
-    Write-Host "  Total Apps  : " -NoNewline; Write-Host $total    -ForegroundColor White
-    Write-Host "  Complete    : " -NoNewline; Write-Host "$complete ($pct%)" -ForegroundColor Green
+    Write-Host "  Total Apps      : " -NoNewline; Write-Host $total -ForegroundColor White
+    Write-Host "  Complete/Ignored: " -NoNewline; Write-Host "$($complete + $ignored) ($pct%)" -ForegroundColor Green
     Write-Host ""
 
     # Status bar
@@ -97,7 +98,8 @@ $whereClause
 ORDER BY
     CASE mi.priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
     CASE mi.status WHEN 'DISCOVERED' THEN 1 WHEN 'READY' THEN 2 WHEN 'STUB_CREATED' THEN 3
-                   WHEN 'IN_PROGRESS' THEN 4 WHEN 'VALIDATED' THEN 5 ELSE 6 END,
+                   WHEN 'IN_PROGRESS' THEN 4 WHEN 'VALIDATED' THEN 5 WHEN 'COMPLETE' THEN 6
+                   WHEN 'IGNORE' THEN 7 ELSE 8 END,
     oa.label
 "@ -SqlParameters $params
 
@@ -166,14 +168,15 @@ function Update-MigrationItem {
         [string[]]$ItemId,
         [string]$OktaAppId,
         [string]$Label,
-        [ValidateSet('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE')]
+        [ValidateSet('DISCOVERED','READY','STUB_CREATED','IN_PROGRESS','VALIDATED','COMPLETE','IGNORE')]
         [string]$Status,
         [ValidateSet('HIGH','MEDIUM','LOW')]
         [string]$Priority,
         [string]$Owner,
         [string]$Notes,
         [switch]$AppendNotes,
-        [string]$Blockers
+        [string]$Blockers,
+        [string]$IgnoreReason
     )
 
     $dbPath    = Get-DbPath
@@ -242,6 +245,11 @@ WHERE mi.project_id=@pid AND oa.label LIKE @lbl
             $setClauses += "blockers=@blockers"
             $params.blockers = $Blockers
             $changes += "blockers updated"
+        }
+        if ($IgnoreReason) {
+            $setClauses += "ignore_reason=@ignoreReason"
+            $params.ignoreReason = $IgnoreReason
+            $changes += "ignore_reason updated"
         }
 
         if ($setClauses.Count -eq 1) {
