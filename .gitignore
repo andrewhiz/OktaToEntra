@@ -1,3 +1,6 @@
+# Claude Code local settings and memory
+.claude/
+
 # Project databases — contain migration data, never commit
 *.db
 *.db-shm
@@ -9,6 +12,16 @@
 # PowerShell test output
 TestResults/
 *.testresult.xml
+
+# Log files
+*.log
+
+# Exported report output (if ever generated inside repo folder)
+Reports/
+Output/
+
+# Backup files
+*.bak
 
 # Editor and OS noise
 .vscode/
