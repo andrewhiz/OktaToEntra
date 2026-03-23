@@ -1,6 +1,6 @@
 @{
     RootModule        = 'OktaToEntra.psm1'
-    ModuleVersion     = '2026.3.1'
+    ModuleVersion     = '2026.3.2'
     GUID              = 'a3f7c2e1-5b4d-4f8a-9c1e-2d6b0f3a7e5c'
     Author            = 'OktaToEntra'
     Description       = 'Okta to Microsoft Entra ID migration management tool'

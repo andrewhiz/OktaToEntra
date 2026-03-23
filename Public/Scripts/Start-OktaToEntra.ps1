@@ -38,7 +38,7 @@ function Start-OktaToEntra {
     # Status and priority number maps — used in options 5 and 7
     $statusMap = @{
         '1' = 'DISCOVERED'; '2' = 'READY';     '3' = 'STUB_CREATED'
-        '4' = 'IN_PROGRESS'; '5' = 'VALIDATED'; '6' = 'COMPLETE'
+        '4' = 'IN_PROGRESS'; '5' = 'VALIDATED'; '6' = 'COMPLETE'; '7' = 'IGNORE'
     }
     $priMap = @{ '1' = 'HIGH'; '2' = 'MEDIUM'; '3' = 'LOW' }
 
@@ -60,7 +60,7 @@ function Start-OktaToEntra {
         Write-Host "  [21] Gather usage data — all apps" -ForegroundColor White
         Write-Host "  [22] Gather usage data — single app" -ForegroundColor White
         Write-Host "  [23] View usage report (all apps)" -ForegroundColor White
-        Write-Host "  [24] View INACTIVE apps only" -ForegroundColor Red
+        Write-Host "  [24] Inactive apps — view / mark as IGNORE" -ForegroundColor Red
         Write-Host "  [25] View usage history for one app" -ForegroundColor White
         Write-Host ""
         Write-Host "  ── Migration Planning ───────────────────────────────" -ForegroundColor DarkGray
@@ -130,7 +130,7 @@ function Start-OktaToEntra {
                 Write-Host ""
                 Write-Host "  Filter by status (Enter to show all):" -ForegroundColor DarkGray
                 Write-Host "  [1] DISCOVERED  [2] READY  [3] STUB_CREATED" -ForegroundColor DarkGray
-                Write-Host "  [4] IN_PROGRESS [5] VALIDATED  [6] COMPLETE" -ForegroundColor DarkGray
+                Write-Host "  [4] IN_PROGRESS [5] VALIDATED  [6] COMPLETE  [7] IGNORE" -ForegroundColor DarkGray
                 $filterIn     = (Read-Host "  Status number or Enter for all").Trim()
                 $filterStatus = if ($filterIn -and $statusMap[$filterIn]) { $statusMap[$filterIn] } else { $null }
                 if ($filterStatus) { Get-MigrationStatus -Status $filterStatus }
@@ -144,135 +144,143 @@ function Start-OktaToEntra {
             }
 
             '7' {
-                if (-not $script:CurrentProject) {
-                    Write-Warn "No active project."
-                    Invoke-PausePrompt; break
-                }
+                if (-not $script:CurrentProject) { Write-Warn "No active project."; Invoke-PausePrompt; break }
 
-                # ── Step 1: Search ────────────────────────────────────────────
                 Write-Host ""
-                $search = (Read-Host "  App search (partial label, or Enter for all)").Trim()
+                Write-Host "  How do you want to update?" -ForegroundColor DarkGray
+                Write-Host "  [1] Search and bulk-edit" -ForegroundColor White
+                Write-Host "  [2] Walk through apps one by one" -ForegroundColor White
+                Write-Host "  [B] Back to main menu" -ForegroundColor DarkGray
+                $mode7 = (Read-Host "  Mode").Trim().ToUpper()
+                if ($mode7 -eq 'B' -or -not $mode7) { break }
 
                 $dbPath    = Get-DbPath
                 $projectId = $script:CurrentProject.ProjectId
 
-                $whereClause = "WHERE mi.project_id=@pid"
-                $sqlParams   = @{ pid = $projectId }
-                if ($search) {
-                    $whereClause += " AND oa.label LIKE @lbl"
-                    $sqlParams.lbl = "%$search%"
-                }
+                if ($mode7 -eq '2') {
+                    # ── One-by-one walk mode ──────────────────────────────────
+                    $walked = Invoke-AppPicker -DbPath $dbPath -ProjectId $projectId `
+                                               -Prompt "Filter apps to walk (partial label)" `
+                                               -MultiSelect -IncludeIgnored
+                    if (-not $walked) { break }
 
-                $found = Invoke-SqliteQuery -DataSource $dbPath -Query @"
-SELECT mi.id              AS ItemId,
-       oa.label           AS AppName,
-       oa.sign_on_mode    AS Protocol,
-       mi.status          AS Status,
-       mi.priority        AS Priority,
-       mi.owner_email     AS Owner
-FROM migration_items mi
-JOIN okta_apps oa ON oa.id = mi.okta_app_id
-$whereClause
-ORDER BY
-    CASE mi.priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
-    CASE mi.status   WHEN 'DISCOVERED' THEN 1 WHEN 'READY' THEN 2
-                     WHEN 'STUB_CREATED' THEN 3 WHEN 'IN_PROGRESS' THEN 4
-                     WHEN 'VALIDATED' THEN 5 ELSE 6 END,
-    oa.label
-"@ -SqlParameters $sqlParams
+                    $walkList = @($walked)
+                    $walkIdx  = 0
+                    foreach ($app in $walkList) {
+                        $walkIdx++
+                        Write-Host ""
+                        Write-Host ("  ── App {0} of {1} ──────────────────────────────────────" -f $walkIdx, $walkList.Count) -ForegroundColor DarkGray
+                        Write-Host "  Name    : $($app.AppName)" -ForegroundColor White
+                        Write-Host "  Protocol: $($app.Protocol)   Status: " -NoNewline
+                        Write-StatusBadge -Status $app.Status
+                        Write-Host "   Priority: $($app.Priority)" -ForegroundColor White
+                        if ($app.Owner) { Write-Host "  Owner   : $($app.Owner)" -ForegroundColor DarkGray }
+                        Write-Host ""
 
-                if (-not $found -or $found.Count -eq 0) {
-                    Write-Warn "  No apps found$(if ($search) { " matching '$search'" })."
-                    Invoke-PausePrompt; break
-                }
+                        Write-Host "  Status:   [1] DISCOVERED  [2] READY  [3] STUB_CREATED" -ForegroundColor DarkGray
+                        Write-Host "            [4] IN_PROGRESS [5] VALIDATED  [6] COMPLETE  [7] IGNORE" -ForegroundColor DarkGray
+                        $statusIn  = (Read-Host "  New status (Enter to skip)").Trim()
+                        $newStatus = if ($statusIn -and $statusMap[$statusIn]) { $statusMap[$statusIn] } else { $null }
 
-                # ── Step 2: Number rows and display paged ─────────────────────
-                $n = 0
-                $numbered = @($found) | ForEach-Object {
-                    $n++
-                    $_ | Add-Member -NotePropertyName 'Num' -NotePropertyValue $n -PassThru
-                }
+                        $newIgnoreReason = $null
+                        if ($newStatus -eq 'IGNORE') {
+                            $newIgnoreReason = (Read-Host "  Reason for ignoring (Enter to skip)").Trim()
+                        }
 
-                $cols = @(
-                    @{ Label='#';        Expression={ $_.Num };      Width=4  }
-                    @{ Label='App Name'; Expression={ $_.AppName };  Width=36 }
-                    @{ Label='Protocol'; Expression={ $_.Protocol }; Width=14 }
-                    @{ Label='Status';   Expression={ $_.Status };   Width=14 }
-                    @{ Label='Pri';      Expression={ $_.Priority };  Width=7 }
-                    @{ Label='Owner';    Expression={ if ($_.Owner) { $_.Owner } else { '—' } }; Width=22 }
-                )
-                Invoke-PagedTable -Rows $numbered -Columns $cols -PageSize 20 -CountLabel 'app(s)'
+                        Write-Host "  Priority: [1] HIGH  [2] MEDIUM  [3] LOW" -ForegroundColor DarkGray
+                        $priIn  = (Read-Host "  New priority (Enter to skip)").Trim()
+                        $newPri = if ($priIn -and $priMap[$priIn]) { $priMap[$priIn] } else { $null }
 
-                # ── Step 3: Pick apps ─────────────────────────────────────────
-                $sel = (Read-Host "  Enter #IDs to update (e.g. 1,3 or 'all')").Trim()
-                if (-not $sel) { break }
+                        $owner    = (Read-Host "  Owner email (Enter to skip)").Trim()
+                        $notes    = (Read-Host "  Notes (Enter to skip)").Trim()
+                        $blockers = (Read-Host "  Blockers (Enter to skip)").Trim()
 
-                $selectedItems = if ($sel -ieq 'all') {
-                    $numbered
+                        $updateParams = @{ ItemId = @($app.ItemId) }
+                        if ($newStatus)       { $updateParams.Status       = $newStatus }
+                        if ($newPri)          { $updateParams.Priority     = $newPri }
+                        if ($owner)           { $updateParams.Owner        = $owner }
+                        if ($notes)           { $updateParams.Notes        = $notes }
+                        if ($blockers)        { $updateParams.Blockers     = $blockers }
+                        if ($newIgnoreReason) { $updateParams.IgnoreReason = $newIgnoreReason }
+
+                        if ($updateParams.Count -gt 1) { Update-MigrationItem @updateParams }
+                        else { Write-Host "  (no changes)" -ForegroundColor DarkGray }
+
+                        if ($walkIdx -lt $walkList.Count) {
+                            $nav = (Read-Host "  [N] Next  [Q] Stop walk").Trim().ToUpper()
+                            if ($nav -eq 'Q') { break }
+                        }
+                    }
+                    Invoke-PausePrompt
+
                 } else {
-                    $selNums = $sel -split ',' |
-                               ForEach-Object { $_.Trim() } |
-                               Where-Object   { $_ -match '^\d+$' } |
-                               ForEach-Object { [int]$_ }
-                    @($numbered | Where-Object { $_.Num -in $selNums })
-                }
+                    # ── Bulk-edit mode (original behaviour) ───────────────────
+                    $selected = Invoke-AppPicker -DbPath $dbPath -ProjectId $projectId `
+                                                 -Prompt "App search (partial label)" `
+                                                 -MultiSelect -IncludeIgnored
+                    if (-not $selected) { break }
 
-                if (-not $selectedItems -or $selectedItems.Count -eq 0) {
-                    Write-Warn "  No valid app IDs selected."
-                    Invoke-PausePrompt; break
-                }
-
-                $selectedIds = @($selectedItems | ForEach-Object { $_.ItemId })
-                Write-Host ""
-                Write-Host ("  Updating {0} app(s): {1}" -f $selectedItems.Count,
-                    ((@($selectedItems) | ForEach-Object { "#$($_.Num) $($_.AppName)" }) -join ', ')) -ForegroundColor Cyan
-
-                # ── Step 4: Status picker ─────────────────────────────────────
-                Write-Host ""
-                Write-Host "  Status:   [1] DISCOVERED  [2] READY  [3] STUB_CREATED" -ForegroundColor DarkGray
-                Write-Host "            [4] IN_PROGRESS [5] VALIDATED  [6] COMPLETE" -ForegroundColor DarkGray
-                $statusIn  = (Read-Host "  New status number (Enter to skip)").Trim()
-                $newStatus = if ($statusIn -and $statusMap[$statusIn]) { $statusMap[$statusIn] } else { $null }
-
-                # ── Step 5: Priority picker ───────────────────────────────────
-                Write-Host "  Priority: [1] HIGH  [2] MEDIUM  [3] LOW" -ForegroundColor DarkGray
-                $priIn  = (Read-Host "  New priority number (Enter to skip)").Trim()
-                $newPri = if ($priIn -and $priMap[$priIn]) { $priMap[$priIn] } else { $null }
-
-                # ── Step 6: Other fields ──────────────────────────────────────
-                $owner    = (Read-Host "  Owner email (Enter to skip)").Trim()
-                $notes    = (Read-Host "  Notes (Enter to skip)").Trim()
-                $blockers = (Read-Host "  Blockers (Enter to skip)").Trim()
-
-                # ── Apply ─────────────────────────────────────────────────────
-                $updateParams = @{ ItemId = $selectedIds }
-                if ($newStatus) { $updateParams.Status   = $newStatus }
-                if ($newPri)    { $updateParams.Priority = $newPri }
-                if ($owner)     { $updateParams.Owner    = $owner }
-                if ($notes)     { $updateParams.Notes    = $notes }
-                if ($blockers)  { $updateParams.Blockers = $blockers }
-
-                if ($updateParams.Count -le 1) {
-                    Write-Warn "  No changes specified."
-                } else {
+                    $selectedIds = @($selected | ForEach-Object { $_.ItemId })
                     Write-Host ""
-                    Update-MigrationItem @updateParams
+                    Write-Host ("  Updating {0} app(s): {1}" -f $selected.Count,
+                        ((@($selected) | ForEach-Object { $_.AppName }) -join ', ')) -ForegroundColor Cyan
+
+                    Write-Host ""
+                    Write-Host "  Status:   [1] DISCOVERED  [2] READY  [3] STUB_CREATED" -ForegroundColor DarkGray
+                    Write-Host "            [4] IN_PROGRESS [5] VALIDATED  [6] COMPLETE  [7] IGNORE" -ForegroundColor DarkGray
+                    $statusIn  = (Read-Host "  New status number (Enter to skip)").Trim()
+                    $newStatus = if ($statusIn -and $statusMap[$statusIn]) { $statusMap[$statusIn] } else { $null }
+
+                    $newIgnoreReason = $null
+                    if ($newStatus -eq 'IGNORE') {
+                        $newIgnoreReason = (Read-Host "  Reason for ignoring (Enter to skip)").Trim()
+                    }
+
+                    Write-Host "  Priority: [1] HIGH  [2] MEDIUM  [3] LOW" -ForegroundColor DarkGray
+                    $priIn  = (Read-Host "  New priority number (Enter to skip)").Trim()
+                    $newPri = if ($priIn -and $priMap[$priIn]) { $priMap[$priIn] } else { $null }
+
+                    $owner    = (Read-Host "  Owner email (Enter to skip)").Trim()
+                    $notes    = (Read-Host "  Notes (Enter to skip)").Trim()
+                    $blockers = (Read-Host "  Blockers (Enter to skip)").Trim()
+
+                    $updateParams = @{ ItemId = $selectedIds }
+                    if ($newStatus)       { $updateParams.Status       = $newStatus }
+                    if ($newPri)          { $updateParams.Priority     = $newPri }
+                    if ($owner)           { $updateParams.Owner        = $owner }
+                    if ($notes)           { $updateParams.Notes        = $notes }
+                    if ($blockers)        { $updateParams.Blockers     = $blockers }
+                    if ($newIgnoreReason) { $updateParams.IgnoreReason = $newIgnoreReason }
+
+                    if ($updateParams.Count -le 1) {
+                        Write-Warn "  No changes specified."
+                    } else {
+                        Write-Host ""
+                        Update-MigrationItem @updateParams
+                    }
+                    Invoke-PausePrompt
                 }
-                Invoke-PausePrompt
             }
 
             '8' {
-                $sub = Read-Host "  [L]ist or [A]dd mapping?"
-                if ($sub -ieq 'a') {
-                    $oid  = Read-Host "  Okta App ID"
+                if (-not $script:CurrentProject) { Write-Warn "No active project."; Invoke-PausePrompt; break }
+                Write-Host "  [L] List mappings   [A] Add mapping   [B] Back" -ForegroundColor DarkGray
+                $sub = (Read-Host "  Choice").Trim().ToUpper()
+                if ($sub -eq 'B' -or -not $sub) { break }
+                if ($sub -eq 'A') {
+                    $picked = Invoke-AppPicker -DbPath (Get-DbPath) -ProjectId $script:CurrentProject.ProjectId `
+                                               -Prompt "Search for app to map (partial label, or Enter for all)"
+                    if (-not $picked) { break }
+                    $app  = $picked | Select-Object -First 1
+                    Write-Host "  Adding group mapping for: $($app.AppName)" -ForegroundColor Cyan
                     $ogid = Read-Host "  Okta Group ID"
                     $ogn  = Read-Host "  Okta Group Name"
                     $egid = Read-Host "  Entra Group ID"
                     $egn  = Read-Host "  Entra Group Name"
-                    Set-AppGroupMapping -OktaAppId $oid -OktaGroupId $ogid -OktaGroupName $ogn `
+                    Set-AppGroupMapping -OktaAppId $app.OktaId -OktaGroupId $ogid -OktaGroupName $ogn `
                                         -EntraGroupId $egid -EntraGroupName $egn
                 } else {
-                    Get-AppGroupMapping
+                    Get-AppGroupMapping  # L or anything else
                 }
                 Invoke-PausePrompt
             }
@@ -288,73 +296,16 @@ ORDER BY
             }
 
             '11' {
-                if (-not $script:CurrentProject) {
-                    Write-Warn "No active project."
-                    Invoke-PausePrompt; break
-                }
+                if (-not $script:CurrentProject) { Write-Warn "No active project."; Invoke-PausePrompt; break }
 
-                # Default: show READY apps. Entering a search term removes the
-                # READY filter so the user can stub any app by label if needed.
-                Write-Host ""
-                Write-Host "  Showing READY apps by default." -ForegroundColor DarkGray
-                Write-Host "  Enter a search term to find apps of any status." -ForegroundColor DarkGray
-                $search = (Read-Host "  App search (or Enter for all READY)").Trim()
+                Write-Host "  Shows READY apps. Use option 7 to change status before stubbing non-READY apps." -ForegroundColor DarkGray
+                $picked = Invoke-AppPicker -DbPath (Get-DbPath) -ProjectId $script:CurrentProject.ProjectId `
+                                           -Prompt "App search (or Enter for all READY)" `
+                                           -FilterStatus @('READY')
 
-                $dbPath    = Get-DbPath
-                $projectId = $script:CurrentProject.ProjectId
+                if (-not $picked) { break }
 
-                if ($search) {
-                    $whereClause = "WHERE mi.project_id=@pid AND oa.label LIKE @lbl"
-                    $sqlParams   = @{ pid = $projectId; lbl = "%$search%" }
-                } else {
-                    $whereClause = "WHERE mi.project_id=@pid AND mi.status='READY'"
-                    $sqlParams   = @{ pid = $projectId }
-                }
-
-                $found = Invoke-SqliteQuery -DataSource $dbPath -Query @"
-SELECT oa.okta_app_id  AS OktaId,
-       oa.label        AS AppName,
-       oa.sign_on_mode AS Protocol,
-       mi.status       AS Status,
-       mi.priority     AS Priority
-FROM migration_items mi
-JOIN okta_apps oa ON oa.id = mi.okta_app_id
-$whereClause
-ORDER BY
-    CASE mi.priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END,
-    oa.label
-"@ -SqlParameters $sqlParams
-
-                if (-not $found -or $found.Count -eq 0) {
-                    $hint = if ($search) { "matching '$search'" } else { "with status READY" }
-                    Write-Warn "  No apps found $hint."
-                    Invoke-PausePrompt; break
-                }
-
-                $n = 0
-                $numbered = @($found) | ForEach-Object {
-                    $n++
-                    $_ | Add-Member -NotePropertyName 'Num' -NotePropertyValue $n -PassThru
-                }
-
-                $cols = @(
-                    @{ Label='#';        Expression={ $_.Num };      Width=4  }
-                    @{ Label='App Name'; Expression={ $_.AppName };  Width=36 }
-                    @{ Label='Protocol'; Expression={ $_.Protocol }; Width=14 }
-                    @{ Label='Status';   Expression={ $_.Status };   Width=14 }
-                    @{ Label='Pri';      Expression={ $_.Priority };  Width=7 }
-                )
-                Invoke-PagedTable -Rows $numbered -Columns $cols -PageSize 20 -CountLabel 'app(s)'
-
-                $sel = (Read-Host "  Enter # to create stub for").Trim()
-                if (-not $sel -or $sel -notmatch '^\d+$') { Invoke-PausePrompt; break }
-
-                $selected = $numbered | Where-Object { $_.Num -eq [int]$sel } | Select-Object -First 1
-                if (-not $selected) {
-                    Write-Warn "  Invalid selection."
-                    Invoke-PausePrompt; break
-                }
-
+                $selected = $picked | Select-Object -First 1
                 Write-Host ""
                 Write-Host "  Creating stub for: $($selected.AppName)" -ForegroundColor Cyan
                 New-EntraAppStub -OktaAppId $selected.OktaId
@@ -401,8 +352,13 @@ ORDER BY
             }
 
             '19' {
-                $label = Read-Host "  App label (partial match)"
+                if (-not $script:CurrentProject) { Write-Warn "No active project."; Invoke-PausePrompt; break }
+                $picked = Invoke-AppPicker -DbPath (Get-DbPath) -ProjectId $script:CurrentProject.ProjectId `
+                                           -Prompt "Search for app to set claim mapping (partial label, or Enter for all)"
+                if (-not $picked) { break }
+                $app = $picked | Select-Object -First 1
                 Write-Host ""
+                Write-Host "  Setting claim mapping for: $($app.AppName)" -ForegroundColor Cyan
                 Write-Host "  Common Entra claim attributes:" -ForegroundColor DarkGray
                 Write-Host "    user.userprincipalname           (UPN — default)" -ForegroundColor DarkGray
                 Write-Host "    user.mail                        (Email)" -ForegroundColor DarkGray
@@ -410,9 +366,9 @@ ORDER BY
                 Write-Host "    user.onpremisesuserprincipalname (On-prem UPN)" -ForegroundColor DarkGray
                 Write-Host "    user.employeeid                  (Employee ID)" -ForegroundColor DarkGray
                 Write-Host ""
-                $attr  = Read-Host "  Entra claim attribute"
+                $attr   = Read-Host "  Entra claim attribute"
                 $anotes = Read-Host "  Notes (why this mapping, caveats)"
-                $aparams = @{ Label=$label; EntraClaimAttribute=$attr }
+                $aparams = @{ Label=$app.AppName; EntraClaimAttribute=$attr }
                 if ($anotes) { $aparams.Notes = $anotes }
                 Set-MigrationClaimMapping @aparams
                 Invoke-PausePrompt
@@ -430,9 +386,13 @@ ORDER BY
             }
 
             '22' {
-                $label = Read-Host "  App label (partial match)"
-                $days  = Read-Host "  Lookback window in days"
-                Get-OktaAppUsage -Label $label -Days ([int]$days)
+                if (-not $script:CurrentProject) { Write-Warn "No active project."; Invoke-PausePrompt; break }
+                $picked = Invoke-AppPicker -DbPath (Get-DbPath) -ProjectId $script:CurrentProject.ProjectId `
+                                           -Prompt "Search for app to gather usage (partial label, or Enter for all)"
+                if (-not $picked) { break }
+                $app  = $picked | Select-Object -First 1
+                $days = Read-Host "  Lookback window in days (e.g. 30, 60, 90)"
+                Get-OktaAppUsage -Label $app.AppName -Days ([int]$days)
                 Invoke-PausePrompt
             }
 
@@ -442,13 +402,114 @@ ORDER BY
             }
 
             '24' {
-                Show-AppUsageReport -UsageFlag INACTIVE
-                Invoke-PausePrompt
+                if (-not $script:CurrentProject) { Write-Warn "No active project."; Invoke-PausePrompt; break }
+
+                do {
+                    Write-Host ""
+                    Write-Host "  ── Inactive Apps ────────────────────────────────────" -ForegroundColor DarkGray
+                    Write-Host "  [1] View inactive apps list" -ForegroundColor White
+                    Write-Host "  [2] Mark inactive apps as IGNORE (one by one)" -ForegroundColor White
+                    Write-Host "  [3] Mark ALL inactive apps as IGNORE (bulk)" -ForegroundColor Red
+                    Write-Host "  [B] Back" -ForegroundColor DarkGray
+                    $sub24 = (Read-Host "  Choice").Trim().ToUpper()
+
+                    switch ($sub24) {
+                        '1' {
+                            Show-AppUsageReport -UsageFlag INACTIVE
+                            Invoke-PausePrompt
+                        }
+
+                        '2' {
+                            # Walk through inactive apps one by one
+                            $dbPath    = Get-DbPath
+                            $projectId = $script:CurrentProject.ProjectId
+
+                            $inactive = Invoke-SqliteQuery -DataSource $dbPath -Query @"
+SELECT mi.id         AS ItemId,
+       oa.label      AS AppName,
+       oa.sign_on_mode AS Protocol,
+       mi.status     AS Status,
+       mi.usage_flag AS UsageFlag,
+       aus.last_login_at AS LastLogin
+FROM migration_items mi
+JOIN okta_apps oa ON oa.id = mi.okta_app_id
+LEFT JOIN app_usage_stats aus ON aus.id = (
+    SELECT id FROM app_usage_stats
+    WHERE okta_app_id = oa.id AND project_id = mi.project_id
+    ORDER BY gathered_at DESC LIMIT 1
+)
+WHERE mi.project_id=@pid AND mi.usage_flag='INACTIVE' AND mi.status != 'IGNORE'
+ORDER BY oa.label
+"@ -SqlParameters @{ pid=$projectId }
+
+                            if (-not $inactive -or $inactive.Count -eq 0) {
+                                Write-Warn "No inactive apps (or all already ignored)."
+                                Invoke-PausePrompt; break
+                            }
+
+                            $idx = 0
+                            foreach ($app in @($inactive)) {
+                                $idx++
+                                Write-Host ""
+                                Write-Host ("  ── {0} of {1} ──────────────────────────────────────" -f $idx, $inactive.Count) -ForegroundColor DarkGray
+                                Write-Host "  $($app.AppName)" -ForegroundColor White
+                                $lastLogin = if ($app.LastLogin) {
+                                    try { ([datetime]$app.LastLogin).ToString('yyyy-MM-dd') } catch { $app.LastLogin }
+                                } else { 'never' }
+                                Write-Host "  Last login: $lastLogin   Protocol: $($app.Protocol)" -ForegroundColor DarkGray
+                                $ans = (Read-Host "  Mark as IGNORE? [Y/N/Q]").Trim().ToUpper()
+                                if ($ans -eq 'Q') { break }
+                                if ($ans -eq 'Y') {
+                                    $reason = (Read-Host "  Reason (Enter to skip)").Trim()
+                                    $upParams = @{ ItemId=@($app.ItemId); Status='IGNORE' }
+                                    if ($reason) { $upParams.IgnoreReason = $reason }
+                                    Update-MigrationItem @upParams
+                                }
+                            }
+                            Invoke-PausePrompt
+                        }
+
+                        '3' {
+                            $dbPath    = Get-DbPath
+                            $projectId = $script:CurrentProject.ProjectId
+
+                            $inactiveCount = (Invoke-SqliteQuery -DataSource $dbPath -Query @"
+SELECT COUNT(*) AS cnt FROM migration_items
+WHERE project_id=@pid AND usage_flag='INACTIVE' AND status != 'IGNORE'
+"@ -SqlParameters @{ pid=$projectId }).cnt
+
+                            if (-not $inactiveCount -or $inactiveCount -eq 0) {
+                                Write-Warn "No inactive apps to mark (or all already ignored)."
+                                Invoke-PausePrompt; break
+                            }
+
+                            Write-Host ""
+                            Write-Warn "This will mark $inactiveCount inactive app(s) as IGNORE."
+                            $confirm = (Read-Host "  Continue? [y/N]").Trim()
+                            if ($confirm -ieq 'y') {
+                                $reason = (Read-Host "  Bulk reason (Enter to skip)").Trim()
+                                $ids = @(Invoke-SqliteQuery -DataSource $dbPath -Query @"
+SELECT mi.id FROM migration_items mi
+WHERE mi.project_id=@pid AND mi.usage_flag='INACTIVE' AND mi.status != 'IGNORE'
+"@ -SqlParameters @{ pid=$projectId } | ForEach-Object { $_.id })
+                                $upParams = @{ ItemId=$ids; Status='IGNORE' }
+                                if ($reason) { $upParams.IgnoreReason = $reason }
+                                Update-MigrationItem @upParams
+                                Write-Success "Marked $inactiveCount app(s) as IGNORE."
+                                Invoke-PausePrompt
+                            }
+                        }
+                    }
+                } while ($sub24 -notin @('B','Q'))
             }
 
             '25' {
-                $label = Read-Host "  App label (partial match)"
-                Get-AppUsageHistory -Label $label
+                if (-not $script:CurrentProject) { Write-Warn "No active project."; Invoke-PausePrompt; break }
+                $picked = Invoke-AppPicker -DbPath (Get-DbPath) -ProjectId $script:CurrentProject.ProjectId `
+                                           -Prompt "Search for app to view history (partial label, or Enter for all)"
+                if (-not $picked) { break }
+                $app = $picked | Select-Object -First 1
+                Get-AppUsageHistory -Label $app.AppName
                 Invoke-PausePrompt
             }
 

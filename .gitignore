@@ -17,8 +17,8 @@ TestResults/
 *.log
 
 # Exported report output (if ever generated inside repo folder)
-Reports/
-Output/
+/Reports/
+/Output/
 
 # Backup files
 *.bak
