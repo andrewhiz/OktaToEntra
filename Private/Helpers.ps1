@@ -149,12 +149,41 @@ function Invoke-OktaApi {
             $params.Body = ($Body | ConvertTo-Json -Depth 10)
         }
 
-        try {
-            $response = Invoke-WebRequest @params -ErrorAction Stop
-        } catch {
-            $statusCode = $_.Exception.Response.StatusCode.value__
-            $errBody    = $_.ErrorDetails.Message
-            throw "Okta API error [$statusCode] on $url : $errBody"
+        # ── Request with 429 retry ────────────────────────────────────────────
+        $response = $null
+        $attempt  = 0
+        do {
+            $attempt++
+            try {
+                $response = Invoke-WebRequest @params -ErrorAction Stop
+            } catch {
+                $statusCode = $_.Exception.Response.StatusCode.value__
+
+                if ($statusCode -eq 429 -and $attempt -lt 4) {
+                    # Respect X-Rate-Limit-Reset (epoch) or Retry-After (seconds)
+                    $waitSecs = 60
+                    try {
+                        $resetVals = $_.Exception.Response.Headers.GetValues('X-Rate-Limit-Reset')
+                        if ($resetVals) {
+                            $nowEpoch = [System.DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+                            $waitSecs = [math]::Max(5, [long]($resetVals | Select-Object -First 1) - $nowEpoch + 2)
+                        } else {
+                            $retryVals = $_.Exception.Response.Headers.GetValues('Retry-After')
+                            if ($retryVals) { $waitSecs = [math]::Max(5, [int]($retryVals | Select-Object -First 1)) }
+                        }
+                    } catch {}
+                    Write-Host ""
+                    Write-Host "  ⏳ Okta rate limit hit — waiting ${waitSecs}s then retrying (attempt $attempt/3)..." -ForegroundColor Yellow
+                    Start-Sleep -Seconds $waitSecs
+                } else {
+                    $errBody = $_.ErrorDetails.Message
+                    throw "Okta API error [$statusCode] on $url : $errBody"
+                }
+            }
+        } while ($null -eq $response -and $attempt -lt 4)
+
+        if ($null -eq $response) {
+            throw "Okta API error [429] on $url : Rate limit exceeded after 3 retries."
         }
 
         $data = $response.Content | ConvertFrom-Json
