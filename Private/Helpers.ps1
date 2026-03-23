@@ -162,10 +162,12 @@ function Invoke-OktaApi {
         if ($data -is [array]) { $results += $data }
         else                   { $results += @($data) }
 
-        # Follow Link header for pagination
+        # Follow Link header for pagination.
+        # In PS7, Headers['Link'] returns string[] not string; join into a scalar
+        # before -match so that $Matches is correctly populated.
         $url = $null
         if (-not $NoPaginate) {
-            $linkHeader = $response.Headers['Link']
+            $linkHeader = @($response.Headers['Link']) -join ', '
             if ($linkHeader -match '<([^>]+)>;\s*rel="next"') {
                 $url = $Matches[1]
             }
