@@ -23,6 +23,16 @@ Add new items here as they come up. Items are loosely grouped by area — no pri
 
 ---
 
+## Reports
+
+- **HTML report improvements** — Keep as a single self-contained HTML file but add:
+  - Column filtering (dropdowns / search per column)
+  - Column sorting (click header to sort asc/desc)
+  - Show/hide column toggles
+  - Pie charts at the top: one by migration status, one by protocol/sign-on mode, one by usage flag
+
+---
+
 ## Phase D — Web Application (Cloudflare)
 
 - Cloudflare Pages + Workers + D1 (SQLite-compatible) + R2 + Queues
