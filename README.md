@@ -1,5 +1,7 @@
 # OktaToEntra — PowerShell Migration Tool
-
+![Top Language](https://img.shields.io/github/languages/top/andrewhiz/OktaToEntra)
+![Languages](https://img.shields.io/github/languages/count/andrewhiz/OktaToEntra)
+![Code Size](https://img.shields.io/github/languages/code-size/andrewhiz/OktaToEntra)
 > A PowerShell module for discovering, planning, and tracking application migrations from Okta to Microsoft Entra ID.
 
 | | |
